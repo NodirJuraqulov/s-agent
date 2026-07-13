@@ -5,6 +5,7 @@ import FormData from 'form-data';
 import axios from 'axios';
 import { config } from './config';
 import { logger } from './logger';
+import { describeError } from './errors';
 
 export type ParkingEventType = 'entry' | 'exit';
 
@@ -96,7 +97,7 @@ export async function sendToServer(
     return await postToServer(type, image, capturedAt);
   } catch (error) {
     if (!isRetryableError(error)) {
-      logger.error(`Server ga yuborishda xato (${type}): ${(error as Error).message}`);
+      logger.error(`Server ga yuborishda xato (${type}): ${describeError(error)}`);
       return { detected: false };
     }
 
@@ -104,7 +105,7 @@ export async function sendToServer(
       const filename = await saveToQueue(type, image, capturedAt);
       logger.warn(`[${LABELS[type]}] Server bilan aloqa yo'q — rasm navbatga saqlandi (queue/${filename})`);
     } catch (queueError) {
-      logger.error(`Navbatga saqlashda xato: ${(queueError as Error).message}`);
+      logger.error(`Navbatga saqlashda xato: ${describeError(queueError)}`);
     }
 
     return { detected: false, queued: true };

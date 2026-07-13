@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { postToServer, QUEUE_DIR, ParkingEventType } from './server';
 import { logger } from './logger';
+import { describeError } from './errors';
 
 const FAILED_DIR = path.join(QUEUE_DIR, 'failed');
 const MAX_ATTEMPTS = 5;
@@ -46,7 +47,7 @@ async function processQueueFile(filename: string): Promise<void> {
   try {
     entry = JSON.parse(await fs.readFile(filePath, 'utf-8'));
   } catch (error) {
-    logger.error(`Navbat faylini o'qib bo'lmadi (${filename}): ${(error as Error).message}`);
+    logger.error(`Navbat faylini o'qib bo'lmadi (${filename}): ${describeError(error)}`);
     return;
   }
 
@@ -68,7 +69,7 @@ async function processQueueFile(filename: string): Promise<void> {
 
     await fs.writeFile(filePath, JSON.stringify(entry));
     logger.warn(
-      `[${label}] Navbatdan qayta yuborishda xato (urinish ${entry.attempts}/${MAX_ATTEMPTS}): ${(error as Error).message}`
+      `[${label}] Navbatdan qayta yuborishda xato (urinish ${entry.attempts}/${MAX_ATTEMPTS}): ${describeError(error)}`
     );
   }
 }

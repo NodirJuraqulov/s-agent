@@ -1,62 +1,70 @@
 import { SerialPort } from 'serialport';
-import { config } from './config';
 import { logger } from './logger';
+import { describeError } from './errors';
 
-let port: SerialPort | null = null;
+// Port yo'liga qarab ochilgan portlarni keshlaymiz — Kirish va Chiqish
+// alohida-alohida (yoki bir xil) portda bo'lishi mumkin, konfiguratsiya
+// backend'dan dinamik kelgani uchun portni har safar ochib o'tirmaymiz.
+const openPorts = new Map<string, SerialPort>();
 
-/**
- * Shlagbaum relay moduli bilan seriya portni ochadi.
- * Port ko'rsatilmagan yoki ulanmagan bo'lsa — log yozib, jim davom etadi.
- */
-export function initBarrier(barrierPort: string): void {
-  if (!barrierPort) {
-    logger.info("Shlagbaum sozlanmagan (BARRIER_PORT bo'sh) — shlagbaum funksiyasi o'chirilgan");
-    return;
+function getOrOpenPort(portPath: string): SerialPort | null {
+  const existing = openPorts.get(portPath);
+  if (existing) {
+    return existing;
   }
 
   try {
-    port = new SerialPort({ path: barrierPort, baudRate: 9600, autoOpen: true }, (err) => {
+    const port = new SerialPort({ path: portPath, baudRate: 9600, autoOpen: true }, (err) => {
       if (err) {
-        logger.error(`Shlagbaum portini ochib bo'lmadi (${barrierPort}): ${err.message}`);
-        port = null;
+        logger.error(`Shlagbaum portini ochib bo'lmadi (${portPath}): ${err.message}`);
+        openPorts.delete(portPath);
       }
     });
 
     port.on('error', (err) => {
-      logger.error(`Shlagbaum port xatosi: ${err.message}`);
+      logger.error(`Shlagbaum port xatosi (${portPath}): ${err.message}`);
     });
+
+    openPorts.set(portPath, port);
+    return port;
   } catch (err) {
-    logger.error(`Shlagbaum ulanmadi: ${(err as Error).message}`);
-    port = null;
+    logger.error(`Shlagbaum ulanmadi (${portPath}): ${describeError(err)}`);
+    return null;
   }
 }
 
-/** Shlagbaumga signal beradi, BARRIER_OPEN_SECONDS kutadi, so'ng yopadi. */
-export async function openBarrier(openSeconds: number = config.barrierOpenSeconds): Promise<void> {
+/**
+ * Shlagbaumga signal beradi: portPath ochiladi (yoki keshdan olinadi),
+ * openSeconds soniya ochiq turadi, so'ng yopiladi. Port ko'rsatilmagan yoki
+ * ulanmagan bo'lsa — log yozib, jim davom etadi (dastur to'xtamaydi).
+ */
+export async function openBarrier(portPath: string | undefined, openSeconds: number): Promise<void> {
+  if (!portPath) {
+    logger.warn('Shlagbaum porti sozlanmagan — signal yuborilmadi, jarayon davom etmoqda');
+    return;
+  }
+
+  const port = getOrOpenPort(portPath);
   if (!port || !port.isOpen) {
-    logger.warn('Shlagbaum ulanmagan — signal yuborilmadi, jarayon davom etmoqda');
+    logger.warn(`Shlagbaum (${portPath}) ulanmagan — signal yuborilmadi, jarayon davom etmoqda`);
     return;
   }
 
   try {
-    await writeToPort(Buffer.from([0x01]));
-    logger.info('Shlagbaum ochildi');
+    await writeToPort(port, Buffer.from([0x01]));
+    logger.info(`Shlagbaum ochildi (${portPath})`);
 
     await sleep(openSeconds * 1000);
 
-    await writeToPort(Buffer.from([0x00]));
-    logger.info('Shlagbaum yopildi');
+    await writeToPort(port, Buffer.from([0x00]));
+    logger.info(`Shlagbaum yopildi (${portPath})`);
   } catch (err) {
-    logger.error(`Shlagbaumga signal yuborishda xato: ${(err as Error).message}`);
+    logger.error(`Shlagbaumga signal yuborishda xato (${portPath}): ${describeError(err)}`);
   }
 }
 
-function writeToPort(data: Buffer): Promise<void> {
+function writeToPort(port: SerialPort, data: Buffer): Promise<void> {
   return new Promise((resolve, reject) => {
-    if (!port) {
-      reject(new Error('Port ochilmagan'));
-      return;
-    }
     port.write(data, (err) => (err ? reject(err) : resolve()));
   });
 }

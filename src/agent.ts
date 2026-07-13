@@ -1,12 +1,16 @@
 import { captureFrame } from './camera';
 import { detectMotion } from './motion';
-import { initBarrier, openBarrier } from './barrier';
+import { openBarrier } from './barrier';
 import { sendToServer, ParkingEventType } from './server';
 import { getQueueSize, processQueue } from './queueProcessor';
+import { getAgentConfig, updateAgentConfig, resolveBarrierPort } from './agentConfig';
+import { fetchAgentConfig } from './configFetcher';
 import { config } from './config';
 import { logger } from './logger';
+import { describeError } from './errors';
 
 const QUEUE_CHECK_INTERVAL_MS = 30000;
+const CONFIG_REFRESH_INTERVAL_MS = 60000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -22,12 +26,24 @@ export function stopAgent(): void {
 /**
  * Bitta kamera oqimini (Kirish yoki Chiqish) kuzatadi. Har bir oqim o'zining
  * previousFrame holatini mustaqil saqlaydi — boshqa oqimga ta'sir qilmaydi.
+ * Kamera URL va shlagbaum sozlamalari HAR TICKDA global (backend'dan kelgan,
+ * `watchConfig` orqali yangilanadigan) konfiguratsiyadan qayta o'qiladi.
  */
-async function watchCamera(type: ParkingEventType, cameraUrl: string, label: string): Promise<void> {
+async function watchCamera(
+  type: ParkingEventType,
+  getCameraUrl: () => string | null,
+  label: string
+): Promise<void> {
   let previousFrame: Buffer | null = null;
 
   while (running) {
     try {
+      const cameraUrl = getCameraUrl();
+      if (!cameraUrl) {
+        logger.error(`${label} xatosi: kamera URL hali backend'da sozlanmagan`);
+        await sleep(5000);
+        continue;
+      }
       const frame = await captureFrame(cameraUrl);
 
       const motion = await detectMotion(frame, previousFrame, config.motionThreshold);
@@ -39,8 +55,14 @@ async function watchCamera(type: ParkingEventType, cameraUrl: string, label: str
         // 2 soniya kut (mashina to'xtasin)
         await sleep(2000);
 
-        // Yangi rasm ol (to'xtagan holat)
-        const snapshot = await captureFrame(cameraUrl);
+        // Yangi rasm ol (to'xtagan holat) — URL yana eng oxirgi holatidan o'qiladi
+        const latestCameraUrl = getCameraUrl();
+        if (!latestCameraUrl) {
+          logger.error(`${label} xatosi: kamera URL hali backend'da sozlanmagan`);
+          await sleep(5000);
+          continue;
+        }
+        const snapshot = await captureFrame(latestCameraUrl);
         const capturedAt = new Date().toISOString();
 
         // s-backend ga yuborish
@@ -48,8 +70,12 @@ async function watchCamera(type: ParkingEventType, cameraUrl: string, label: str
 
         if (result.detected) {
           logger.info(`${label}: nomer aniqlandi: ${result.session?.plate_number ?? "noma'lum"}`);
-          // Shlagbaum och
-          await openBarrier();
+
+          const agentConfig = getAgentConfig();
+          if (agentConfig.barrierEnabled) {
+            const port = resolveBarrierPort(agentConfig, type);
+            await openBarrier(port, agentConfig.barrierOpenSeconds);
+          }
         } else if (!result.queued) {
           // queued=true holatda sendToServer o'zi "navbatga saqlandi" logini allaqachon yozgan
           logger.warn(`${label}: nomer aniqlanmadi — operator xabardor`);
@@ -62,7 +88,7 @@ async function watchCamera(type: ParkingEventType, cameraUrl: string, label: str
       // Keyingi tekshiruv
       await sleep(config.captureIntervalMs);
     } catch (error) {
-      logger.error(`${label} xatosi: ${(error as Error).message}`);
+      logger.error(`${label} xatosi: ${describeError(error)}`);
       await sleep(5000); // Xato bo'lsa 5s kut, qayta urinish
     }
   }
@@ -71,11 +97,11 @@ async function watchCamera(type: ParkingEventType, cameraUrl: string, label: str
 }
 
 function watchEntry(): Promise<void> {
-  return watchCamera('entry', config.cameraEntryUrl, 'Kirish');
+  return watchCamera('entry', () => getAgentConfig().cameraEntryUrl, 'Kirish');
 }
 
 function watchExit(): Promise<void> {
-  return watchCamera('exit', config.cameraExitUrl, 'Chiqish');
+  return watchCamera('exit', () => getAgentConfig().cameraExitUrl, 'Chiqish');
 }
 
 /**
@@ -93,24 +119,41 @@ async function watchQueue(): Promise<void> {
         await processQueue();
       }
     } catch (error) {
-      logger.error(`Navbatni tekshirishda xato: ${(error as Error).message}`);
+      logger.error(`Navbatni tekshirishda xato: ${describeError(error)}`);
     }
   }
 
   logger.info("Navbat kuzatuvi to'xtatildi");
 }
 
+/**
+ * Qolgan uchta oqimdan mustaqil: har CONFIG_REFRESH_INTERVAL_MS da backend'dan
+ * kamera/shlagbaum konfiguratsiyasini qayta oladi. Xato bo'lsa — eski
+ * konfiguratsiya bilan davom etiladi (dastur to'xtamaydi).
+ */
+async function watchConfig(): Promise<void> {
+  while (running) {
+    await sleep(CONFIG_REFRESH_INTERVAL_MS);
+
+    try {
+      const newConfig = await fetchAgentConfig();
+      updateAgentConfig(newConfig);
+    } catch (error) {
+      logger.error(
+        `Konfiguratsiya yangilashda xato: ${describeError(error)} — eski konfiguratsiya bilan davom etilmoqda`
+      );
+    }
+  }
+
+  logger.info("Konfiguratsiya kuzatuvi to'xtatildi");
+}
+
 export async function startAgent(): Promise<void> {
   logger.info('AutoStoyanka Local Agent ishga tushdi');
-  logger.info(`Kirish kamerasi: ${config.cameraEntryUrl}`);
-  logger.info(`Chiqish kamerasi: ${config.cameraExitUrl}`);
   logger.info(`Server: ${config.serverUrl}`);
-  logger.info(`ORG_ID: ${config.orgId}`);
 
-  initBarrier(config.barrierPort);
-
-  // Kirish, Chiqish va Navbat oqimlari bir vaqtda, mustaqil ishlaydi
-  await Promise.all([watchEntry(), watchExit(), watchQueue()]);
+  // Kirish, Chiqish, Navbat va Konfiguratsiya oqimlari bir vaqtda, mustaqil ishlaydi
+  await Promise.all([watchEntry(), watchExit(), watchQueue(), watchConfig()]);
 
   logger.info("Local Agent to'xtatildi");
 }
