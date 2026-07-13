@@ -11,10 +11,11 @@ function required(name: string): string {
 }
 
 export const config = {
-  cameraUrl: required('CAMERA_URL'),
+  cameraEntryUrl: required('CAMERA_ENTRY_URL'),
+  cameraExitUrl: required('CAMERA_EXIT_URL'),
   serverUrl: required('SERVER_URL'),
   orgId: required('ORG_ID'),
-  secretKey: required('SECRET_KEY'),
+  agentApiKey: required('AGENT_API_KEY'),
   cameraUsername: process.env.CAMERA_USERNAME || 'admin',
   cameraPassword: process.env.CAMERA_PASSWORD || 'admin',
   barrierPort: process.env.BARRIER_PORT || '',

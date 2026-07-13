@@ -3,15 +3,19 @@ import sharp from 'sharp';
 const FRAME_WIDTH = 320;
 const FRAME_HEIGHT = 240;
 
-let previousFrame: Buffer | null = null;
-
 /**
  * Oldingi kadr bilan hozirgi kadrni grayscale piksel farqi orqali solishtiradi.
- * Birinchi chaqiruvda (previousFrame yo'q) har doim false qaytaradi.
+ * Pure function — holatni o'zida saqlamaydi: previousFrame chaqiruvchi tomonidan
+ * uzatiladi va saqlanadi. Shu tufayli bir nechta mustaqil oqim (masalan Kirish
+ * va Chiqish kameralari) bir-birining holatini buzmasdan parallel ishlatilishi
+ * mumkin.
  */
-export async function detectMotion(currentFrame: Buffer, threshold: number = 20): Promise<boolean> {
+export async function detectMotion(
+  currentFrame: Buffer,
+  previousFrame: Buffer | null,
+  threshold: number
+): Promise<boolean> {
   if (!previousFrame) {
-    previousFrame = currentFrame;
     return false;
   }
 
@@ -31,8 +35,6 @@ export async function detectMotion(currentFrame: Buffer, threshold: number = 20)
   for (let i = 0; i < prev.length; i++) {
     diff += Math.abs(prev[i] - curr[i]);
   }
-
-  previousFrame = currentFrame;
 
   const avgDiff = diff / prev.length;
   return avgDiff > threshold;
