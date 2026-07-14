@@ -12,16 +12,24 @@ export type ParkingEventType = 'entry' | 'exit';
 export interface EntryResult {
   detected: boolean;
   queued?: boolean;
+  confidence?: number;
   session?: {
     id?: number;
     plate_number?: string;
   };
 }
 
+export interface VerifyResult {
+  plate: string | null;
+  confidence: number;
+}
+
 const PATHS: Record<ParkingEventType, string> = {
   entry: '/api/agent/parking/entry',
   exit: '/api/agent/parking/exit',
 };
+
+const VERIFY_PATH = '/api/agent/parking/verify';
 
 const LABELS: Record<ParkingEventType, string> = {
   entry: 'Kirish',
@@ -109,5 +117,35 @@ export async function sendToServer(
     }
 
     return { detected: false, queued: true };
+  }
+}
+
+/**
+ * Ikkinchi (mustaqil) kadrni tekshiradi — sessiya YARATMAYDI, bazaga
+ * yozmaydi, faqat OCR natijasini qaytaradi. Shlagbaumni ochishdan oldingi
+ * qo'shimcha tasdiqlash (`agent.ts`) uchun ishlatiladi. Bu — navbat (queue)
+ * mantig'iga kirmaydi: xato bo'lsa fail-closed tarzda "aniqlanmadi" deb
+ * qaytaradi (noaniq holatda shlagbaum ochilmasligi kerak).
+ */
+export async function verifyPlate(image: Buffer): Promise<VerifyResult> {
+  try {
+    const form = new FormData();
+    form.append('image', image, {
+      filename: 'snapshot.jpg',
+      contentType: 'image/jpeg',
+    });
+
+    const response = await axios.post<VerifyResult>(`${config.serverUrl}${VERIFY_PATH}`, form, {
+      headers: {
+        ...form.getHeaders(),
+        'X-Agent-Key': config.agentApiKey,
+      },
+      timeout: 15000,
+    });
+
+    return response.data;
+  } catch (error) {
+    logger.error(`Ikkinchi tasdiqlashda xato: ${describeError(error)}`);
+    return { plate: null, confidence: 0 };
   }
 }

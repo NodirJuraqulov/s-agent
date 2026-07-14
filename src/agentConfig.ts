@@ -1,3 +1,4 @@
+import { config } from './config';
 import { logger } from './logger';
 
 /**
@@ -13,6 +14,10 @@ export interface AgentConfig {
   // Backend'da hali sozlanmagan bo'lishi mumkin (yangi tashkilot) — shu sabab null.
   cameraEntryUrl: string | null;
   cameraExitUrl: string | null;
+  // Kamera login/paroli ham endi backend'da (shifrlangan holda) saqlanadi —
+  // sozlanmagan bo'lsa null, shu holda config.ts dagi local fallback ishlatiladi.
+  cameraUsername: string | null;
+  cameraPassword: string | null;
   barrierEnabled: boolean;
   barrierMode?: BarrierMode;
   barrierEntryPort?: string;
@@ -52,6 +57,18 @@ export function resolveBarrierPort(agentConfig: AgentConfig, type: 'entry' | 'ex
     return agentConfig.barrierExitPort;
   }
   return agentConfig.barrierEntryPort;
+}
+
+/**
+ * Kamera uchun ishlatiladigan HTTP Basic Auth login/parolini aniqlaydi:
+ * backend'da sozlangan bo'lsa o'sha ishlatiladi, aks holda `.env` dagi
+ * local fallback (`CAMERA_USERNAME`/`CAMERA_PASSWORD`).
+ */
+export function resolveCameraAuth(agentConfig: AgentConfig): { username: string; password: string } {
+  return {
+    username: agentConfig.cameraUsername ?? config.cameraUsername,
+    password: agentConfig.cameraPassword ?? config.cameraPassword,
+  };
 }
 
 /** Yangi konfiguratsiyani global holatga yozadi va qisqacha xulosani logga chiqaradi. */

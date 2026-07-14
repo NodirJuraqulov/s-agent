@@ -28,14 +28,15 @@ s-agent/
 │   ├── camera.ts         — kameradan snapshot (JPEG buffer) olish
 │   ├── motion.ts         — ikki kadrni grayscale piksel farqi orqali solishtirish (sharp, pure function)
 │   ├── barrier.ts         — shlagbaum relay moduliga serialport orqali signal (port dinamik)
-│   ├── server.ts          — s-backend bilan aloqa (POST /api/agent/parking/{entry|exit})
+│   ├── server.ts          — s-backend bilan aloqa (POST /api/agent/parking/{entry|exit|verify})
 │   ├── queueProcessor.ts  — offline navbatni (queue/) qayta ishlash
 │   ├── configFetcher.ts   — GET /api/agent/config — backend'dan kamera/shlagbaum sozlamalarini oladi
 │   ├── agentConfig.ts     — backend'dan kelgan sozlamalarning global (dinamik) holati
+│   ├── liveView.ts        — Live View: Socket.IO orqali kamera oqimini backend'ga "quvur" kabi uzatish
 │   ├── config.ts          — .env o'zgaruvchilarini o'qish va validatsiya (faqat LOCAL sozlamalar)
 │   ├── errors.ts          — xatolarni logga yozish uchun o'qiladigan matnga aylantirish
 │   ├── logger.ts           — console + fayl (logs/agent.log) logging
-│   ├── agent.ts            — Kirish, Chiqish, Navbat va Konfiguratsiya oqimlari (parallel)
+│   ├── agent.ts            — Kirish, Chiqish, Navbat, Konfiguratsiya va Live View oqimlari (parallel)
 │   └── index.ts            — kirish nuqtasi
 ├── logs/            — ish vaqtidagi loglar (agent.log)
 ├── queue/           — s-backend ga yuborib bo'lmagan so'rovlar (runtime, git'ga qo'shilmaydi)
@@ -74,6 +75,7 @@ cp .env.example .env   # so'ng .env faylini o'z qiymatlaringiz bilan tahrirlang
 | `CAMERA_USERNAME` / `CAMERA_PASSWORD` | Kameraning HTTP Basic Auth login/paroli |
 | `CAPTURE_INTERVAL_MS` | Kameradan necha millisoniyada bir kadr olinadi |
 | `MOTION_THRESHOLD` | Harakat deb hisoblanadigan o'rtacha piksel farqi chegarasi |
+| `BARRIER_CONFIDENCE_THRESHOLD` | Shlagbaumni ochish uchun talab qilinadigan OCR ishonch darajasi (0–1, standart `0.75`) — sessiya yozish uchun ishlatiladigan (backend ichidagi) umumiy chegaradan alohida va odatda undan yuqoriroq |
 
 **Backend'dan keladigan** (`.env`da YO'Q) sozlamalar: `camera_entry_url`,
 `camera_exit_url`, `barrier_enabled`, `barrier_mode` (`single`/`separate`),
@@ -141,20 +143,54 @@ Har ikkala oqim ham quyidagi mantiqni bajaradi:
    - `POST {SERVER_URL}/api/agent/parking/entry` (yoki `.../exit`) ga
      `multipart/form-data` (`image`, `captured_at`) va
      `X-Agent-Key: {AGENT_API_KEY}` header bilan yuboriladi.
-3. Javob `{ detected, session: { plate_number } }` shaklida qaytadi:
-   - `detected: true` → nomer (`session.plate_number`) logga yoziladi. Agar
-     joriy konfiguratsiyada `barrier_enabled: true` bo'lsa — shlagbaum
-     ochiladi: qaysi port ishlatilishi `barrier_mode`ga bog'liq —
-     `"separate"` bo'lsa Chiqish o'zining alohida portidan (`barrier_exit_port`)
-     foydalanadi, aks holda (`"single"` yoki belgilanmagan) ikkalasi ham
-     `barrier_entry_port`dan foydalanadi (backend'dagi
-     `settingsService.testBarrier` bilan bir xil mantiq — `agentConfig.ts` →
-     `resolveBarrierPort()`).
+3. Javob `{ detected, confidence, session: { plate_number } }` shaklida qaytadi:
+   - `detected: true` → nomer (`session.plate_number`) logga yoziladi, sessiya
+     bazaga **allaqachon yozilgan** (backend tomonidan). Shlagbaumni ochish
+     qarori esa quyidagi "Shlagbaumni ochishdan oldingi ikki bosqichli himoya"
+     mantig'iga o'tadi — sessiya yozilishi bilan bog'liq emas.
    - `detected: false` → operator server tomonidan xabardor qilinadi
      (WebSocket/polling — bu `s-backend` va frontend tomonida amalga
      oshiriladi).
 4. Harakatdan keyin 5 soniya "sovish" pauzasi qo'yiladi — bitta mashina uchun
    qayta-qayta ishga tushmasligi uchun.
+
+## Shlagbaumni ochishdan oldingi ikki bosqichli himoya
+
+OCR modeli tasodifiy xato bilan noto'g'ri narsani (devordagi yozuv, reklama)
+"nomer" deb aniqlab, shlagbaumni keraksiz ochib yubormasligi uchun,
+**sessiya bazaga yozilishi bilan shlagbaum ochilishi endi ajratilgan**:
+sessiya har doim `detected: true` bo'lganda yoziladi (o'zgarmadi), lekin
+shlagbaum quyidagi ikkala shartni ham qanoatlantirgandagina ochiladi
+(`confirmAndOpenBarrier()`, `agent.ts`):
+
+1. **Yuqoriroq ishonch chegarasi:** birinchi kadrning `confidence`si
+   `BARRIER_CONFIDENCE_THRESHOLD` (standart `0.75`) dan past bo'lsa —
+   shlagbaum **umuman urinilmaydi** (ikkinchi tekshiruv ham o'tkazilmaydi).
+   Log: `"ishonch darajasi past (0.60 < 0.75) — shlagbaum ochilmadi, sessiya
+   baribir yozildi"`.
+2. **Ketma-ket 2 marta mustaqil tasdiqlash:** birinchi kadr yetarli ishonchli
+   bo'lsa ham, ~1 soniyadan keyin **yana bitta** mustaqil kadr olinadi va
+   `POST /api/agent/parking/verify` ga yuboriladi — bu endpoint **sessiya
+   yaratmaydi, bazaga yozmaydi**, faqat OCR natijasini (`{ plate, confidence }`)
+   qaytaradi. Faqat ikkala kadr ham **bir xil nomer**ni va
+   `BARRIER_CONFIDENCE_THRESHOLD`dan yuqori ishonchni bersa — shlagbaum
+   ochiladi. Mos kelmasa: log `"ikkinchi tasdiqlash mos kelmadi (1-nomer=...,
+   2-nomer=..., ishonch=...) — shlagbaum ochilmadi"`.
+
+**Muhim:** bu ikkinchi tekshiruv backend'ga yuborilayotgan asosiy entry/exit
+so'rovi (nomer + rasm + sessiya yozuvi) sonini **oshirmaydi** — u faqat
+lokal, qo'shimcha `/verify` so'rovi, natijasi faqat shlagbaum qaroriga
+ta'sir qiladi. `s-python` (OCR modeli) ga to'g'ridan-to'g'ri murojaat
+qilinmaydi — xavfsizlik va tarmoq sabablariga ko'ra (`s-python:/detect`
+autentifikatsiyasiz va faqat backend serverining o'zida ishlaydi), buning
+o'rniga `s-backend`dagi yangi, `X-Agent-Key` bilan himoyalangan
+`POST /api/agent/parking/verify` orqali (ichkarida xuddi shu `detectPlate()`
+ni chaqiradi).
+
+Ikkinchi tekshiruv paytida kamera yoki server bilan xato yuz bersa (masalan
+tarmoq uzilishi) — fail-closed: shlagbaum **ochilmaydi**, xato logga yoziladi,
+lekin dastur davom etadi (sessiya allaqachon yozilgan bo'lgani uchun hech
+narsa yo'qolmaydi).
 
 > **`MOTION_THRESHOLD` haqida:** `avgDiff` — bu piksel boshiga o'rtacha farq
 > va 0–255 oralig'ida bo'ladi (OpenCV'dagi butun kadr bo'yicha yig'indidan
@@ -184,6 +220,64 @@ soniyada `"kamera URL hali backend'da sozlanmagan"` yoki
 `"Agent konfiguratsiyasi hali backend'dan yuklanmagan"` xatosini qaytarib
 turadi — bu ham normal holat, `watchConfig` muvaffaqiyatli ishlagach avtomatik
 tuzaladi.
+
+## Live View (kamera oqimini operatorga uzatish)
+
+Operator Dashboard'dagi jonli kamera ko'rinishi shu arxitektura orqali ishlaydi:
+
+```
+Operator brauzeri → s-backend (HTTP, GET /api/live-view) → Socket.IO → s-agent → HTTP GET → Kamera
+```
+
+`s-backend` kameraga hech qachon to'g'ridan-to'g'ri ulanmaydi — buni faqat
+`s-agent` qiladi (chunki u kamera bilan bir xil local tarmoqda). `s-agent`
+kameradan kelayotgan xom baytlarni **hech qanday parsing/qayta kodlashsiz**
+Socket.IO orqali backendga "quvur" kabi uzatadi (`liveView.ts`).
+
+> **Eslatma:** bu funksiyaning `s-backend` tomoni (`socketServer.ts`,
+> `liveViewRelay.ts`, `GET /api/live-view`, kamera login/parolini shifrlab
+> saqlash) **avvaldan tayyor va sinovdan o'tgan edi** — shu safar men faqat
+> `s-agent` tomonini (`liveView.ts`) qurdim va uni mavjud backend bilan
+> real ravishda ulab sinadim.
+
+1. **Ulanish:** ishga tushganda `startAgent()` (`agent.ts`) bitta marta
+   `startLiveView()` ni chaqiradi — bu boshqa to'rtta oqimdan (Kirish,
+   Chiqish, Navbat, Konfiguratsiya) mustaqil, o'zining voqea-asosidagi
+   (event-driven) Socket.IO ulanishi. Autentifikatsiya HTTP header emas,
+   handshake `auth` obyekti orqali: `{ auth: { agentKey: AGENT_API_KEY } }`.
+2. **`live_view:start` ({ type })** — backend'dan kelganda: joriy
+   konfiguratsiyadan (`agentConfig.ts`) tegishli kamera URL va login/parolni
+   olib, kameraga `responseType: 'stream'` bilan ulanadi.
+   - Muvaffaqiyatli ulangach, **birinchi chunk'dan oldin** darhol
+     `live_view:started({ type, content_type })` yuboriladi — backend buni
+     10 soniya ichida kutmasa, tomoshabinlarga 502 qaytaradi.
+   - Har bir kelgan baytlar bo'lagi o'zgarishsiz `live_view:chunk({ type, chunk })`
+     sifatida uzatiladi.
+   - Kameraga ulanib bo'lmasa yoki oqim keyinroq uzilib qolsa —
+     `live_view:error({ type, message })`.
+3. **`live_view:stop` ({ type })** — kameraga ochilgan HTTP ulanish
+   (`AbortController` orqali) yopiladi. Agar shu turdagi faol oqim
+   bo'lmasa — jim o'tkazib yuboriladi.
+4. **Bir xil turga takroriy `live_view:start`** (masalan ikkinchi
+   tomoshabin) — backend buni allaqachon safarbar qiladi (bitta org+type
+   uchun faqat bitta `start` yuboradi, ko'p tomoshabinni o'zi ichida
+   ko'paytiradi), lekin `s-agent` ham himoyalangan: agar shu tur uchun
+   allaqachon faol oqim bo'lsa, takroriy `start` shunchaki e'tiborsiz
+   qoldiriladi (ikkinchi marta kameraga ulanilmaydi).
+5. **Kirish va Chiqish mustaqil:** har biri o'zining alohida HTTP
+   ulanishini saqlaydi (`Map<'entry'|'exit', ...>`) — biri to'xtasa yoki
+   xato bersa, ikkinchisiga ta'sir qilmaydi.
+6. **Socket.IO uzilsa:** backend o'z tomonidan barcha tomoshabinlarni
+   yakunlaydi — `s-agent` hech narsa qilishi shart emas, lekin xotira
+   sizib chiqmasligi uchun **o'zining** ochiq kamera HTTP ulanishlarini
+   ham darhol yopadi (`stopAllStreams()`, `disconnect` hodisasida).
+
+> **Kamera login/paroli endi ham backend'dan:** `agentConfig.ts`dagi
+> `resolveCameraAuth()` avval backend'da (shifrlangan holda) sozlangan
+> `camera_username`/`camera_password`ni ishlatadi, faqat sozlanmagan bo'lsa
+> `.env`dagi `CAMERA_USERNAME`/`CAMERA_PASSWORD` local fallback sifatida
+> ishlatiladi. Bu — oddiy kadr olish (`captureFrame`) va Live View uchun bir
+> xil, yagona manba.
 
 ## Offline navbat (queue)
 
@@ -257,19 +351,71 @@ Ushbu kompyuterda (haqiqiy `s-backend` va MySQL bazasi bilan, real
 - **Offline navbat:** mock server bilan — server o'chirilganda saqlash,
   qayta yoqilganda muvaffaqiyatli qayta yuborish va o'chirish, 401'da
   saqlanmaslik, doimiy 5xx holatida 5 urinishdan keyin `failed/`ga ko'chishi.
+- **Shlagbaumni ochishdan oldingi ikki bosqichli himoya:** to'liq ishlab
+  turgan `dist/index.js` orqali (soxta backend + soxta kamera server bilan,
+  ikkita farqli test kadr — harakatni haqiqiy tetiklash uchun) uchta ssenariy
+  tekshirildi:
+  - ikkala kadr ham bir xil nomer + yuqori ishonch → shlagbaum ochishga
+    urindi (`openBarrier()` chaqirilgani logdan tasdiqlandi),
+  - ikkinchi kadr boshqa nomer qaytardi → shlagbaum **ochilmadi**, aniq log
+    bilan (`openBarrier()` chaqirilmadi),
+  - birinchi kadrning ishonchi past (`0.6 < 0.75`) → ikkinchi tekshiruv
+    **umuman boshlanmadi**, shlagbaum darhol o'tkazib yuborildi.
 
 Real IP kamera vaqti-vaqti bilan tarmoqda mavjud emasligi sababli (jismoniy
-qurilma holati), harakat aniqlash → shlagbaum ochilishigacha bo'lgan to'liq
-zanjirni haqiqiy mashina bilan yakuniy tekshirish stoyankada amalga
-oshiriladi.
+qurilma holati) va Python OCR xizmati (`s-python`) ham hozircha ishga
+tushirilmagani sababli, harakat aniqlash → shlagbaum ochilishigacha bo'lgan
+to'liq zanjirni **haqiqiy nomer va real OCR natijasi** bilan yakuniy
+tekshirish stoyankada amalga oshiriladi.
+
+- **Live View:** haqiqiy `s-backend` + haqiqiy `dist/index.js` + soxta
+  kamera serverlar bilan to'liq end-to-end sinaldi (real Socket.IO, real
+  JWT bilan operator sifatida `GET /api/live-view`ga so'rov yuborib):
+  - bitta tomoshabin (Kirish) → `200`, to'g'ri `Content-Type`, chunklar
+    ketma-ket qabul qilindi; tomoshabin uzilganda kameraga ochilgan HTTP
+    ulanish darhol yopilgani mock kamera logidan tasdiqlandi,
+  - **ikkita tomoshabin bir vaqtda** (bir xil tur) → ikkalasi ham to'g'ri,
+    bir xil ma'lumot oldi, lekin kameraga faqat **bitta** ulanish ochildi
+    (backend fan-out'i + agentning takroriy-start himoyasi ishladi),
+  - **Kirish va Chiqish bir vaqtda** → ikkalasi ham mustaqil, to'g'ri,
+    aralashmagan ma'lumot bilan ishladi,
+  - kamera o'chirilganda (mock server to'xtatildi) → aniq **502** va
+    `"Kameraga ulanib bo'lmadi: connect ECONNREFUSED ..."` xabari tomoshabinga
+    yetib bordi,
+  - Kirish kamerasi o'chgan holatda ham **Chiqish** butunlay normal ishlashda
+    davom etdi (mustaqillik tasdiqlandi).
+
+## Backend'da qilingan qo'shimcha o'zgarishlar (s-backend)
+
+Ushbu funksiya uchun `s-backend`da ham kichik, orqaga mos (additive)
+o'zgarishlar qilindi:
+
+- **`src/modules/parking/parking.service.ts`** — `entryAuto`/`exitAuto`
+  javobiga `confidence` maydoni qo'shildi (`ocrResult.confidence`) — avval bu
+  qiymat backend ichida hisoblanardi, lekin javobga chiqarilmagan edi.
+- **`src/modules/agent/agent.controller.ts`** — yangi `verifyHandler`:
+  rasmni qabul qilib, mavjud `detectPlate()` orqali OCR qiladi, **sessiya
+  yaratmasdan/bazaga yozmasdan** `{ plate, confidence }` qaytaradi.
+- **`src/modules/agent/agent.routes.ts`** — yangi marshrut:
+  `POST /api/agent/parking/verify` (mavjud `agentAuth` — `X-Agent-Key` bilan
+  himoyalangan, xuddi `/entry`, `/exit` kabi).
+
+`s-python` (OCR modeli) o'zgarmadi — u hech qachon tashqi tarmoqqa
+ochilmaydi, faqat `s-backend` orqali (ichki, `localhost`) chaqiriladi.
 
 ## Natija
 
+**s-agent:**
 - `src/camera.ts`, `src/motion.ts`, `src/barrier.ts`, `src/server.ts`,
   `src/queueProcessor.ts`, `src/configFetcher.ts`, `src/agentConfig.ts`,
-  `src/config.ts`, `src/errors.ts`, `src/logger.ts`, `src/agent.ts`,
-  `src/index.ts`
-- `.env`, `.env.example`, `package.json`, `tsconfig.json`, `.gitignore`,
-  `README.md`
+  `src/liveView.ts` (yangi), `src/config.ts`, `src/errors.ts`, `src/logger.ts`,
+  `src/agent.ts`, `src/index.ts`
+- `.env`, `.env.example`, `package.json` (`socket.io-client` qo'shildi),
+  `tsconfig.json`, `.gitignore`, `README.md`
 
-`tsc --noEmit` va `npm run build` xatosiz o'tadi.
+**s-backend:**
+- `src/modules/parking/parking.service.ts`,
+  `src/modules/agent/agent.controller.ts`, `src/modules/agent/agent.routes.ts`
+
+Ikkala loyihada ham `tsc --noEmit` xatosiz o'tadi, `s-agent`da `npm run build`
+ham xatosiz.

@@ -1,10 +1,11 @@
 import { captureFrame } from './camera';
 import { detectMotion } from './motion';
 import { openBarrier } from './barrier';
-import { sendToServer, ParkingEventType } from './server';
+import { sendToServer, verifyPlate, EntryResult, ParkingEventType } from './server';
 import { getQueueSize, processQueue } from './queueProcessor';
-import { getAgentConfig, updateAgentConfig, resolveBarrierPort } from './agentConfig';
+import { getAgentConfig, updateAgentConfig, resolveBarrierPort, resolveCameraAuth } from './agentConfig';
 import { fetchAgentConfig } from './configFetcher';
+import { startLiveView, stopLiveView } from './liveView';
 import { config } from './config';
 import { logger } from './logger';
 import { describeError } from './errors';
@@ -21,6 +22,59 @@ let running = true;
 /** Asosiy sikllarni to'xtatadi (SIGINT kabi holatlarda graceful shutdown uchun). */
 export function stopAgent(): void {
   running = false;
+  stopLiveView();
+}
+
+/**
+ * Shlagbaumni ochishdan oldingi ikki bosqichli himoya:
+ *  1) Birinchi kadrning ishonch darajasi (`confidence`) BARRIER_CONFIDENCE_THRESHOLD
+ *     dan past bo'lsa — shlagbaum umuman ochilmaydi (sessiya baribir bazaga
+ *     yozilgan, buni backend allaqachon qilib bo'lgan).
+ *  2) Yetarli ishonchli bo'lsa ham, ~1 soniyadan keyin YANA bitta mustaqil
+ *     kadr olinib, `verifyPlate()` orqali (sessiya YARATMASDAN) tekshiriladi.
+ *     Faqat ikkala kadr ham BIR XIL nomerni va yetarli ishonchni bersa,
+ *     shlagbaum ochiladi. Bu — backend'ga yuborilayotgan asosiy entry/exit
+ *     so'roviga TA'SIR QILMAYDI, faqat lokal shlagbaum qaroriga tegishli.
+ */
+async function confirmAndOpenBarrier(
+  type: ParkingEventType,
+  cameraUrl: string,
+  firstResult: EntryResult,
+  label: string
+): Promise<void> {
+  const agentConfig = getAgentConfig();
+  if (!agentConfig.barrierEnabled) {
+    return;
+  }
+
+  const firstPlate = firstResult.session?.plate_number;
+  const firstConfidence = firstResult.confidence ?? 0;
+
+  if (!firstPlate || firstConfidence < config.barrierConfidenceThreshold) {
+    logger.warn(
+      `${label}: ishonch darajasi past (${firstConfidence.toFixed(2)} < ${config.barrierConfidenceThreshold}) — shlagbaum ochilmadi, sessiya baribir yozildi`
+    );
+    return;
+  }
+
+  try {
+    await sleep(1000);
+    const { username, password } = resolveCameraAuth(agentConfig);
+    const secondFrame = await captureFrame(cameraUrl, username, password);
+    const secondCheck = await verifyPlate(secondFrame);
+
+    if (secondCheck.plate === firstPlate && secondCheck.confidence >= config.barrierConfidenceThreshold) {
+      const port = resolveBarrierPort(agentConfig, type);
+      await openBarrier(port, agentConfig.barrierOpenSeconds);
+    } else {
+      logger.warn(
+        `${label}: ikkinchi tasdiqlash mos kelmadi (1-nomer=${firstPlate}, 2-nomer=${secondCheck.plate ?? "yo'q"}, ` +
+          `ishonch=${secondCheck.confidence.toFixed(2)}) — shlagbaum ochilmadi`
+      );
+    }
+  } catch (error) {
+    logger.warn(`${label}: ikkinchi tasdiqlashda xato (${describeError(error)}) — shlagbaum ochilmadi`);
+  }
 }
 
 /**
@@ -44,7 +98,8 @@ async function watchCamera(
         await sleep(5000);
         continue;
       }
-      const frame = await captureFrame(cameraUrl);
+      const { username, password } = resolveCameraAuth(getAgentConfig());
+      const frame = await captureFrame(cameraUrl, username, password);
 
       const motion = await detectMotion(frame, previousFrame, config.motionThreshold);
       previousFrame = frame;
@@ -62,7 +117,8 @@ async function watchCamera(
           await sleep(5000);
           continue;
         }
-        const snapshot = await captureFrame(latestCameraUrl);
+        const { username: latestUsername, password: latestPassword } = resolveCameraAuth(getAgentConfig());
+        const snapshot = await captureFrame(latestCameraUrl, latestUsername, latestPassword);
         const capturedAt = new Date().toISOString();
 
         // s-backend ga yuborish
@@ -70,12 +126,7 @@ async function watchCamera(
 
         if (result.detected) {
           logger.info(`${label}: nomer aniqlandi: ${result.session?.plate_number ?? "noma'lum"}`);
-
-          const agentConfig = getAgentConfig();
-          if (agentConfig.barrierEnabled) {
-            const port = resolveBarrierPort(agentConfig, type);
-            await openBarrier(port, agentConfig.barrierOpenSeconds);
-          }
+          await confirmAndOpenBarrier(type, latestCameraUrl, result, label);
         } else if (!result.queued) {
           // queued=true holatda sendToServer o'zi "navbatga saqlandi" logini allaqachon yozgan
           logger.warn(`${label}: nomer aniqlanmadi — operator xabardor`);
@@ -151,6 +202,10 @@ async function watchConfig(): Promise<void> {
 export async function startAgent(): Promise<void> {
   logger.info('AutoStoyanka Local Agent ishga tushdi');
   logger.info(`Server: ${config.serverUrl}`);
+
+  // Live View — Socket.IO orqali, o'zining voqea-asosidagi (event-driven)
+  // ulanishi bilan, boshqa to'rtta oqimdan mustaqil ishlaydi.
+  startLiveView();
 
   // Kirish, Chiqish, Navbat va Konfiguratsiya oqimlari bir vaqtda, mustaqil ishlaydi
   await Promise.all([watchEntry(), watchExit(), watchQueue(), watchConfig()]);

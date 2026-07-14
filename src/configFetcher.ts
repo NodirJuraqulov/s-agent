@@ -5,6 +5,8 @@ import { AgentConfig } from './agentConfig';
 interface RawAgentConfig {
   camera_entry_url: string | null;
   camera_exit_url: string | null;
+  camera_username: string | null;
+  camera_password: string | null;
   barrier_enabled: boolean;
   barrier_mode?: 'single' | 'separate' | null;
   barrier_entry_port?: string | null;
@@ -26,6 +28,8 @@ export async function fetchAgentConfig(): Promise<AgentConfig> {
   return {
     cameraEntryUrl: raw.camera_entry_url,
     cameraExitUrl: raw.camera_exit_url,
+    cameraUsername: raw.camera_username,
+    cameraPassword: raw.camera_password,
     barrierEnabled: raw.barrier_enabled,
     barrierMode: raw.barrier_mode ?? undefined,
     barrierEntryPort: raw.barrier_entry_port ?? undefined,
