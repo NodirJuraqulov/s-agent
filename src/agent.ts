@@ -2,7 +2,7 @@ import { EventEmitter } from 'events';
 import { captureFrame } from './camera';
 import { detectMotion } from './motion';
 import { openBarrier } from './barrier';
-import { sendToServer, verifyPlate, EntryResult, ParkingEventType } from './server';
+import { sendToServer, verifyPlate, sendHeartbeat, EntryResult, ParkingEventType } from './server';
 import { getQueueSize, processQueue } from './queueProcessor';
 import { getAgentConfig, updateAgentConfig, resolveBarrierPort, resolveCameraAuth } from './agentConfig';
 import { fetchAgentConfig } from './configFetcher';
@@ -13,6 +13,7 @@ import { describeError } from './errors';
 
 const QUEUE_CHECK_INTERVAL_MS = 30000;
 const CONFIG_REFRESH_INTERVAL_MS = 60000;
+const HEARTBEAT_INTERVAL_MS = 30000;
 
 let running = true;
 
@@ -226,16 +227,37 @@ async function watchConfig(): Promise<void> {
   logger.info("Konfiguratsiya kuzatuvi to'xtatildi");
 }
 
+/**
+ * Qolgan oqimlardan mustaqil: har HEARTBEAT_INTERVAL_MS da backend'ga
+ * "men tirikman" signalini yuboradi — shunda operator/Super Admin panelda
+ * s-agent oflayn bo'lib qolganini bilish mumkin bo'ladi. Xato bo'lsa —
+ * faqat log yoziladi, tizim to'xtamaydi (heartbeat vaqtincha yetib
+ * bormasligi hech qanday funksional oqimga ta'sir qilmasligi kerak).
+ */
+async function watchHeartbeat(): Promise<void> {
+  while (running) {
+    try {
+      await sendHeartbeat();
+    } catch (error) {
+      logger.warn(`Heartbeat yuborishda xato: ${describeError(error)}`);
+    }
+    await sleep(HEARTBEAT_INTERVAL_MS);
+  }
+
+  logger.info("Heartbeat kuzatuvi to'xtatildi");
+}
+
 export async function startAgent(): Promise<void> {
   logger.info('AutoStoyanka Local Agent ishga tushdi');
   logger.info(`Server: ${config.serverUrl}`);
 
   // Live View — Socket.IO orqali, o'zining voqea-asosidagi (event-driven)
-  // ulanishi bilan, boshqa to'rtta oqimdan mustaqil ishlaydi.
+  // ulanishi bilan, boshqa oqimlardan mustaqil ishlaydi.
   startLiveView();
 
-  // Kirish, Chiqish, Navbat va Konfiguratsiya oqimlari bir vaqtda, mustaqil ishlaydi
-  await Promise.all([watchEntry(), watchExit(), watchQueue(), watchConfig()]);
+  // Kirish, Chiqish, Navbat, Konfiguratsiya va Heartbeat oqimlari bir
+  // vaqtda, mustaqil ishlaydi
+  await Promise.all([watchEntry(), watchExit(), watchQueue(), watchConfig(), watchHeartbeat()]);
 
   logger.info("Local Agent to'xtatildi");
 }

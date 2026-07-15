@@ -30,6 +30,7 @@ const PATHS: Record<ParkingEventType, string> = {
 };
 
 const VERIFY_PATH = '/api/agent/parking/verify';
+const HEARTBEAT_PATH = '/api/agent/heartbeat';
 
 const LABELS: Record<ParkingEventType, string> = {
   entry: 'Kirish',
@@ -148,4 +149,21 @@ export async function verifyPlate(image: Buffer): Promise<VerifyResult> {
     logger.error(`Ikkinchi tasdiqlashda xato: ${describeError(error)}`);
     return { plate: null, confidence: 0 };
   }
+}
+
+/**
+ * Backend'ga "men tirikman" signalini yuboradi — juda kichik, tez so'rov
+ * (body yo'q). Xato bo'lsa tashlaydi — chaqiruvchi (`agent.ts`) buni faqat
+ * log yozib o'tkazib yuborishi kerak, chunki heartbeat vaqtincha
+ * yetib bormasligi tizimni to'xtatadigan sabab emas.
+ */
+export async function sendHeartbeat(): Promise<void> {
+  await axios.post(
+    `${config.serverUrl}${HEARTBEAT_PATH}`,
+    {},
+    {
+      headers: { 'X-Agent-Key': config.agentApiKey },
+      timeout: 5000,
+    }
+  );
 }

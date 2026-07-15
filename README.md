@@ -28,7 +28,7 @@ s-agent/
 │   ├── camera.ts         — kameradan bitta JPEG kadr olish (snapshot ham, uzluksiz MJPEG stream ham — universal)
 │   ├── motion.ts         — ikki kadrni grayscale piksel farqi orqali solishtirish (sharp, pure function)
 │   ├── barrier.ts         — shlagbaum relay moduliga serialport orqali signal (port dinamik)
-│   ├── server.ts          — s-backend bilan aloqa (POST /api/agent/parking/{entry|exit|verify})
+│   ├── server.ts          — s-backend bilan aloqa (POST /api/agent/parking/{entry|exit|verify}, /heartbeat)
 │   ├── queueProcessor.ts  — offline navbatni (queue/) qayta ishlash
 │   ├── configFetcher.ts   — GET /api/agent/config — backend'dan kamera/shlagbaum sozlamalarini oladi
 │   ├── agentConfig.ts     — backend'dan kelgan sozlamalarning global (dinamik) holati
@@ -37,7 +37,7 @@ s-agent/
 │   ├── errors.ts          — xatolarni logga yozish uchun o'qiladigan matnga aylantirish
 │   ├── logger.ts           — console + kunlik rotatsiyalanadigan fayl (winston) logging
 │   ├── lock.ts             — bitta nusxa kafolati (lock/agent.lock, PID tekshiruvi)
-│   ├── agent.ts            — Kirish, Chiqish, Navbat, Konfiguratsiya va Live View oqimlari (parallel)
+│   ├── agent.ts            — Kirish, Chiqish, Navbat, Konfiguratsiya, Heartbeat va Live View oqimlari (parallel)
 │   └── index.ts            — kirish nuqtasi, uncaughtException/graceful shutdown
 ├── logs/            — ish vaqtidagi loglar (agent-YYYY-MM-DD.log, 14 kundan keyin avtomatik o'chadi)
 ├── lock/            — agent.lock (runtime, joriy jarayon PID'i, git'ga qo'shilmaydi)
@@ -406,6 +406,25 @@ soniyada `"kamera URL hali backend'da sozlanmagan"` yoki
 turadi — bu ham normal holat, `watchConfig` muvaffaqiyatli ishlagach avtomatik
 tuzaladi.
 
+## Heartbeat ("men tirikman" signali)
+
+`watchHeartbeat()` (`agent.ts`) — qolgan oqimlardan mustaqil beshinchi oqim:
+ishga tushgan zahoti va shundan keyin har **30 soniyada** bir marta,
+`POST {SERVER_URL}/api/agent/heartbeat` ga (`X-Agent-Key` bilan, bo'sh
+body) juda kichik, tez so'rov yuboradi. Backend bu so'rovni olganda
+`tb_settings.last_heartbeat_at` ustunini yangilaydi (`recordHeartbeat()`,
+`s-backend`) — shu orqali operator/Super Admin panelda ushbu ustunning
+qanchalik "eskirganiga" qarab s-agent oflayn bo'lib qolganini bilish
+mumkin bo'ladi.
+
+Heartbeat so'rovi muvaffaqiyatsiz bo'lsa (server javob bermasa, tarmoq
+uzilsa) — bu **hech qanday boshqa funksional oqimga ta'sir qilmaydi**:
+xato faqat `"Heartbeat yuborishda xato: ..."` deb ogohlantirish (`WARN`)
+sifatida logga yoziladi, oqim davom etadi va 30 soniyadan keyin qayta
+urinadi. Navbat (queue) mantig'iga bog'liq emas — heartbeat'ning o'zi
+takrorlanuvchi bo'lgani uchun muvaffaqiyatsiz urinishni alohida
+saqlab qo'yishning hojati yo'q.
+
 ## Live View (kamera oqimini operatorga uzatish)
 
 Operator Dashboard'dagi jonli kamera ko'rinishi shu arxitektura orqali ishlaydi:
@@ -528,6 +547,17 @@ yuboriladi:
 Ushbu kompyuterda (haqiqiy `s-backend` va MySQL bazasi bilan, real
 `GET /api/agent/config` orqali):
 
+- **Heartbeat (`POST /api/agent/heartbeat`):** haqiqiy backend bilan —
+  `curl` orqali to'g'ridan-to'g'ri chaqirilib, `tb_settings.last_heartbeat_at`
+  ustuni haqiqatan yangilanishi tasdiqlandi (`200 {"ok":true}`). So'ng real
+  `s-agent` ishga tushirilib (35 soniya), heartbeat oqimi xatosiz ishlagani
+  va bazadagi vaqt yangilangani tasdiqlandi. Keyin **noto'g'ri `SERVER_URL`**
+  bilan qayta sinaldi: `"Heartbeat yuborishda xato: ECONNREFUSED"` faqat
+  ogohlantirish (`WARN`) sifatida logga yozildi, boshqa barcha oqimlar
+  (Kirish/Chiqish/Navbat/Konfiguratsiya/Live View) o'zlarining mustaqil
+  xatolarini alohida qayta urinishda davom etdi — heartbeat xatosi
+  ularning birortasini ham to'xtatmadi. Graceful shutdown ham heartbeat
+  oqimini to'g'ri to'xtatdi (`"Heartbeat kuzatuvi to'xtatildi"`).
 - **Bitta nusxa kafolati (`lock/agent.lock`):** real ikkita alohida jarayon
   bilan sinaldi (birinchisi ishga tushirilib, ustiga ikkinchisi):
   - 1-nusxa ishlab turganda 2-nusxa ishga tushirilganda — **darhol**
@@ -668,13 +698,31 @@ o'zgarishlar qilindi:
 `s-python` (OCR modeli) o'zgarmadi — u hech qachon tashqi tarmoqqa
 ochilmaydi, faqat `s-backend` orqali (ichki, `localhost`) chaqiriladi.
 
+**Heartbeat uchun qo'shilgan o'zgarishlar:**
+
+- **`migrations/20260715090000_add_last_heartbeat_to_settings.ts`** (yangi) —
+  `tb_settings` ga `last_heartbeat_at` (nullable timestamp) ustuni.
+- **`src/modules/settings/settings.service.ts`** — yangi
+  `recordHeartbeat(orgId)`: `last_heartbeat_at` ni joriy vaqt bilan
+  yangilaydi. `SettingsRecord` interfeysiga ham qo'shildi — shu orqali
+  mavjud `GET /api/settings` javobida (Admin panel uchun) ham avtomatik
+  ko'rinadi.
+- **`src/modules/agent/agent.controller.ts`** — yangi `heartbeatHandler`.
+- **`src/modules/agent/agent.routes.ts`** — yangi, alohida
+  `agentHeartbeatRouter` (parking rate-limit bilan ULASHILMAYDI — heartbeat
+  har 30 soniyada doimiy keladi, parking so'rovlari uchun mo'ljallangan
+  chelakni "yeb qo'ymasligi" kerak).
+- **`src/app.ts`** — yangi marshrut mount qilindi:
+  `POST /api/agent/heartbeat` (`X-Agent-Key` bilan himoyalangan).
+
 ## Natija
 
 **s-agent:**
-- `src/camera.ts`, `src/motion.ts`, `src/barrier.ts`, `src/server.ts`,
-  `src/queueProcessor.ts`, `src/configFetcher.ts`, `src/agentConfig.ts`,
-  `src/liveView.ts`, `src/lock.ts` (yangi), `src/config.ts`, `src/errors.ts`,
-  `src/logger.ts`, `src/agent.ts`, `src/index.ts`
+- `src/camera.ts`, `src/motion.ts`, `src/barrier.ts`, `src/server.ts`
+  (`sendHeartbeat()` qo'shildi), `src/queueProcessor.ts`,
+  `src/configFetcher.ts`, `src/agentConfig.ts`, `src/liveView.ts`,
+  `src/lock.ts`, `src/config.ts`, `src/errors.ts`, `src/logger.ts`,
+  `src/agent.ts` (`watchHeartbeat()` qo'shildi), `src/index.ts`
 - `.env`, `.env.example`, `package.json` (`socket.io-client`, `winston`,
   `winston-daily-rotate-file` qo'shildi, `pm2:*` skriptlari),
   `ecosystem.config.js` (PM2 konfiguratsiyasi — `kill_timeout` oshirildi),
@@ -682,8 +730,12 @@ ochilmaydi, faqat `s-backend` orqali (ichki, `localhost`) chaqiriladi.
   `README.md`
 
 **s-backend:**
-- `src/modules/parking/parking.service.ts`,
-  `src/modules/agent/agent.controller.ts`, `src/modules/agent/agent.routes.ts`
+- `migrations/20260715090000_add_last_heartbeat_to_settings.ts` (yangi),
+  `src/modules/settings/settings.service.ts` (`recordHeartbeat()` qo'shildi),
+  `src/modules/parking/parking.service.ts`,
+  `src/modules/agent/agent.controller.ts` (`heartbeatHandler` qo'shildi),
+  `src/modules/agent/agent.routes.ts` (`agentHeartbeatRouter` qo'shildi),
+  `src/app.ts` (yangi marshrut mount qilindi)
 
 Ikkala loyihada ham `tsc --noEmit` xatosiz o'tadi, `s-agent`da `npm run build`
 ham xatosiz.
