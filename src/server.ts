@@ -152,15 +152,20 @@ export async function verifyPlate(image: Buffer): Promise<VerifyResult> {
 }
 
 /**
- * Backend'ga "men tirikman" signalini yuboradi — juda kichik, tez so'rov
- * (body yo'q). Xato bo'lsa tashlaydi — chaqiruvchi (`agent.ts`) buni faqat
+ * Backend'ga "men tirikman" signalini yuboradi — juda kichik, tez so'rov.
+ * `cameraEntryOk`/`cameraExitOk` — har bir kamera turining ENG SO'NGGI
+ * `captureFrame()` urinishi muvaffaqiyatli bo'lgan-bo'lmaganini bildiradi
+ * (`agent.ts` dagi `lastCameraEntryOk`/`lastCameraExitOk`) — hali hech
+ * qanday urinish bo'lmagan bo'lsa `null`. Shunda backend/operator s-agent
+ * DASTURI ishlab turgani bilan birga, KAMERANING o'zi ham ulanganligini
+ * bilib oladi. Xato bo'lsa tashlaydi — chaqiruvchi (`agent.ts`) buni faqat
  * log yozib o'tkazib yuborishi kerak, chunki heartbeat vaqtincha
  * yetib bormasligi tizimni to'xtatadigan sabab emas.
  */
-export async function sendHeartbeat(): Promise<void> {
+export async function sendHeartbeat(cameraEntryOk: boolean | null, cameraExitOk: boolean | null): Promise<void> {
   await axios.post(
     `${config.serverUrl}${HEARTBEAT_PATH}`,
-    {},
+    { camera_entry_ok: cameraEntryOk, camera_exit_ok: cameraExitOk },
     {
       headers: { 'X-Agent-Key': config.agentApiKey },
       timeout: 5000,

@@ -17,6 +17,45 @@ const HEARTBEAT_INTERVAL_MS = 30000;
 
 let running = true;
 
+
+// Har bir turning ENG SO'NGGI captureFrame() urinishi muvaffaqiyatli
+// bo'lgan-bo'lmaganini saqlaydi — heartbeat shu qiymatlarni backend'ga
+// yuboradi (dastur ishlab tursa ham, kameraning o'zi uzilib qolgan holatni
+// aniqlash uchun). `null` — hali birorta ham captureFrame() urinilmagan
+// (dastur endigina ishga tushgan).
+let lastCameraEntryOk: boolean | null = null;
+let lastCameraExitOk: boolean | null = null;
+
+function setCameraHealth(type: ParkingEventType, ok: boolean): void {
+  if (type === 'entry') {
+    lastCameraEntryOk = ok;
+  } else {
+    lastCameraExitOk = ok;
+  }
+}
+
+/**
+ * `captureFrame()`ni chaqiradi va natijasini (muvaffaqiyatli/xato) darhol
+ * `lastCameraEntryOk`/`lastCameraExitOk` ga yozib qo'yadi — xato bo'lsa
+ * qayta tashlaydi, chunki chaqiruvchi (`watchCamera`) buni odatdagidek
+ * o'zining tashqi `catch` blokida logga yozib, qayta urinishi kerak.
+ */
+async function captureFrameTracked(
+  type: ParkingEventType,
+  cameraUrl: string,
+  username: string,
+  password: string
+): Promise<Buffer> {
+  try {
+    const frame = await captureFrame(cameraUrl, username, password);
+    setCameraHealth(type, true);
+    return frame;
+  } catch (error) {
+    setCameraHealth(type, false);
+    throw error;
+  }
+}
+
 // stopAgent() chaqirilganda BARCHA hozir kutayotgan sleep() lar darhol
 // uyg'onishi uchun — aks holda watchConfig (60s) yoki watchQueue (30s) kabi
 // oqimlar shutdown paytida hali ham uzoq vaqt "uxlab" yotgan bo'lishi mumkin
@@ -123,11 +162,12 @@ async function watchCamera(
       const cameraUrl = getCameraUrl();
       if (!cameraUrl) {
         logger.error(`${label} xatosi: kamera URL hali backend'da sozlanmagan`);
+        setCameraHealth(type, false);
         await sleep(5000);
         continue;
       }
       const { username, password } = resolveCameraAuth(getAgentConfig());
-      const frame = await captureFrame(cameraUrl, username, password);
+      const frame = await captureFrameTracked(type, cameraUrl, username, password);
 
       const motion = await detectMotion(frame, previousFrame, config.motionThreshold);
       previousFrame = frame;
@@ -142,11 +182,12 @@ async function watchCamera(
         const latestCameraUrl = getCameraUrl();
         if (!latestCameraUrl) {
           logger.error(`${label} xatosi: kamera URL hali backend'da sozlanmagan`);
+          setCameraHealth(type, false);
           await sleep(5000);
           continue;
         }
         const { username: latestUsername, password: latestPassword } = resolveCameraAuth(getAgentConfig());
-        const snapshot = await captureFrame(latestCameraUrl, latestUsername, latestPassword);
+        const snapshot = await captureFrameTracked(type, latestCameraUrl, latestUsername, latestPassword);
         const capturedAt = new Date().toISOString();
 
         // s-backend ga yuborish
@@ -237,7 +278,7 @@ async function watchConfig(): Promise<void> {
 async function watchHeartbeat(): Promise<void> {
   while (running) {
     try {
-      await sendHeartbeat();
+      await sendHeartbeat(lastCameraEntryOk, lastCameraExitOk);
     } catch (error) {
       logger.warn(`Heartbeat yuborishda xato: ${describeError(error)}`);
     }
