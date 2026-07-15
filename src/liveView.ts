@@ -65,6 +65,10 @@ async function handleLiveViewStart(type: CameraType): Promise<void> {
     return;
   }
 
+  logger.info(
+    `Live view (${type}): kameraga ulanish urinilmoqda: url=${cameraUrl}, username=${username}, password_length=${password.length}`
+  );
+
   // 'live_view:stop' javob kelmasdan oldin ham yetib kelishi mumkin —
   // shu holatda javob kelgach oqimni darhol yopamiz (pastga qarang).
   let stopped = false;

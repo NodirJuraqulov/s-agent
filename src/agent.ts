@@ -1,3 +1,4 @@
+import { EventEmitter } from 'events';
 import { captureFrame } from './camera';
 import { detectMotion } from './motion';
 import { openBarrier } from './barrier';
@@ -13,16 +14,42 @@ import { describeError } from './errors';
 const QUEUE_CHECK_INTERVAL_MS = 30000;
 const CONFIG_REFRESH_INTERVAL_MS = 60000;
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 let running = true;
 
-/** Asosiy sikllarni to'xtatadi (SIGINT kabi holatlarda graceful shutdown uchun). */
+// stopAgent() chaqirilganda BARCHA hozir kutayotgan sleep() lar darhol
+// uyg'onishi uchun — aks holda watchConfig (60s) yoki watchQueue (30s) kabi
+// oqimlar shutdown paytida hali ham uzoq vaqt "uxlab" yotgan bo'lishi mumkin
+// edi, va graceful shutdown haqiqatda tez bo'lmasdi.
+const shutdownEmitter = new EventEmitter();
+shutdownEmitter.setMaxListeners(0);
+
+function sleep(ms: number): Promise<void> {
+  // `running` allaqachon false bo'lsa (masalan xato-blokidagi kutish
+  // shutdown signali ALLAQACHON berilgandan KEYIN boshlangan bo'lsa) —
+  // "shutdown" hodisasi endi hech qachon qayta kelmaydi, shuning uchun
+  // uni kutib o'tirmasdan darhol qaytamiz.
+  if (!running) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      shutdownEmitter.off('shutdown', onShutdown);
+      resolve();
+    }, ms);
+    const onShutdown = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    shutdownEmitter.once('shutdown', onShutdown);
+  });
+}
+
+/** Asosiy sikllarni to'xtatadi (SIGINT/SIGTERM kabi holatlarda graceful shutdown uchun). */
 export function stopAgent(): void {
   running = false;
   stopLiveView();
+  shutdownEmitter.emit('shutdown');
 }
 
 /**

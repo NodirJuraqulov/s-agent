@@ -1,6 +1,9 @@
 node_modules/
 dist/
 logs/*.log
+logs/*.log.gz
+logs/.*.json
 .env
 *.log
 queue/
+lock/

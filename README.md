@@ -25,7 +25,7 @@ login/parol va texnik parametrlar.
 ```
 s-agent/
 ├── src/
-│   ├── camera.ts         — kameradan snapshot (JPEG buffer) olish
+│   ├── camera.ts         — kameradan bitta JPEG kadr olish (snapshot ham, uzluksiz MJPEG stream ham — universal)
 │   ├── motion.ts         — ikki kadrni grayscale piksel farqi orqali solishtirish (sharp, pure function)
 │   ├── barrier.ts         — shlagbaum relay moduliga serialport orqali signal (port dinamik)
 │   ├── server.ts          — s-backend bilan aloqa (POST /api/agent/parking/{entry|exit|verify})
@@ -35,14 +35,17 @@ s-agent/
 │   ├── liveView.ts        — Live View: Socket.IO orqali kamera oqimini backend'ga "quvur" kabi uzatish
 │   ├── config.ts          — .env o'zgaruvchilarini o'qish va validatsiya (faqat LOCAL sozlamalar)
 │   ├── errors.ts          — xatolarni logga yozish uchun o'qiladigan matnga aylantirish
-│   ├── logger.ts           — console + fayl (logs/agent.log) logging
+│   ├── logger.ts           — console + kunlik rotatsiyalanadigan fayl (winston) logging
+│   ├── lock.ts             — bitta nusxa kafolati (lock/agent.lock, PID tekshiruvi)
 │   ├── agent.ts            — Kirish, Chiqish, Navbat, Konfiguratsiya va Live View oqimlari (parallel)
-│   └── index.ts            — kirish nuqtasi
-├── logs/            — ish vaqtidagi loglar (agent.log)
+│   └── index.ts            — kirish nuqtasi, uncaughtException/graceful shutdown
+├── logs/            — ish vaqtidagi loglar (agent-YYYY-MM-DD.log, 14 kundan keyin avtomatik o'chadi)
+├── lock/            — agent.lock (runtime, joriy jarayon PID'i, git'ga qo'shilmaydi)
 ├── queue/           — s-backend ga yuborib bo'lmagan so'rovlar (runtime, git'ga qo'shilmaydi)
 │   └── failed/      — 5 marta urinishdan keyin ham yuborilmagan so'rovlar
 ├── .env             — mahalliy sozlamalar (git'ga qo'shilmaydi)
 ├── .env.example     — namuna sozlamalar
+├── ecosystem.config.js — PM2 konfiguratsiyasi (avtomatik qayta ko'tarish)
 ├── package.json
 ├── tsconfig.json
 └── README.md
@@ -97,18 +100,89 @@ npm run build
 npm start
 ```
 
-## Avtostart sozlash
+## Avtostart va avtomatik qayta ko'tarilish (PM2)
 
-- **Windows:** Task Scheduler orqali `npm start` (yoki `node dist/index.js`)
-  buyrug'ini tizim yuklanganda ishga tushiradigan vazifa yarating, yoki
-  `node-windows` paketidan foydalanib Windows Service sifatida o'rnating.
-- **Linux:** `systemd` service fayli yarating (masalan
-  `/etc/systemd/system/s-agent.service`) va `WorkingDirectory` +
-  `ExecStart=/usr/bin/node dist/index.js` ni ko'rsating, so'ng
-  `systemctl enable s-agent`.
+Stoyanka kompyuteri qanday operatsion tizim ekani oldindan noma'lum bo'lgani
+uchun, **PM2** ishlatiladi — u Windows, macOS va Linux'ning barchasida bir
+xil ishlaydigan, universal Node.js process-menejeri. PM2 ikkita narsani
+ta'minlaydi:
+
+1. **Qulasa avtomatik qayta ko'tarish** — `s-agent` istalgan sababdan
+   to'xtab qolsa (`kill -9`, kutilmagan xato, hatto operatsion tizim
+   qulab tushib qayta yuklanishi), PM2 uni darhol qayta ishga tushiradi.
+2. **Kompyuter qayta yuklanganda avtomatik ishga tushish** — bu qism
+   operatsion tizimga qarab farq qiladi (pastga qarang).
+
+Loyihada tayyor **`ecosystem.config.js`** fayli bor — barcha 3 platformada
+bir xil ishlaydi, o'zgartirish shart emas.
+
+### 1-qadam — barcha platformalarda umumiy
+
+```bash
+npm install -g pm2      # PM2'ni butun tizimga (global) o'rnatish
+npm run build            # dist/ papkasini tayyorlash
+
+pm2 start ecosystem.config.js   # s-agent'ni PM2 orqali ishga tushirish
+pm2 save                        # joriy holatni saqlash (keyingi qadam uchun shart)
+```
+
+Foydali buyruqlar (`package.json` skriptlari orqali ham chaqirish mumkin):
+
+```bash
+npm run pm2:status     # holatni ko'rish
+npm run pm2:logs       # jonli loglarni kuzatish
+npm run pm2:restart    # qo'lda qayta ishga tushirish
+npm run pm2:stop       # to'xtatish
+```
+
+### 2-qadam — kompyuter yuklanganda avtomatik ishga tushish (OS'ga qarab)
+
+#### 🪟 Windows
+
+PM2'ning o'zi Windows'da `pm2 startup` orqali ishlay olmaydi (bu faqat
+systemd/launchd bor tizimlar uchun) — shuning uchun **`pm2-windows-startup`**
+qo'shimcha paketi kerak:
+
+```bash
+npm install -g pm2-windows-startup
+pm2-startup install
+```
+
+Shu bilan PM2'ning o'zi (demak `s-agent` ham) Windows yuklanganda fonda
+avtomatik ishga tushadigan bo'ladi.
+
+#### 🍎 macOS
+
+```bash
+pm2 startup
+```
+
+Bu buyruq ekranga `sudo env PATH=... pm2 startup launchd -u <foydalanuvchi> --hp <uy-papka>`
+ko'rinishidagi buyruqni chiqaradi — **shu chiqqan buyruqni nusxalab, o'zingiz
+ishga tushiring** (PM2 buni avtomatik bajarmaydi, chunki `sudo` kerak).
+Bu — macOS'ning `launchd` tizimiga PM2'ni ro'yxatdan o'tkazadi.
+
+#### 🐧 Linux
+
+```bash
+pm2 startup
+```
+
+Xuddi macOS'dagidek — ekranga chiqqan `sudo ...` buyrug'ini nusxalab ishga
+tushiring. PM2 sizning distributivingizga mos init tizimini (odatda
+`systemd`) avtomatik aniqlaydi va shunga mos buyruq beradi.
+
+> **Eslatma:** `pm2 startup` buyrug'i har doim **sizning aniq
+> foydalanuvchi nomingiz va operatsion tizimingizga mos** buyruq chiqaradi
+> — shuning uchun bu README'da bitta qattiq kod o'rniga, "buyruqni ishga
+> tushiring va PM2 sizga keyingi qadamni ko'rsatadi" tarzida yozilgan.
 
 ## Ishga tushish jarayoni (index.ts)
 
+0. **`acquireLock()`** — hamma narsadan OLDIN: shu kompyuterda s-agentning
+   boshqa nusxasi allaqachon ishlab turgan-turmaganini tekshiradi (pastga,
+   "Bitta nusxa kafolati" bo'limiga qarang). Agar boshqa nusxa jonli bo'lsa —
+   backend'ga so'rov yuborilmasdanoq, darhol `process.exit(1)`.
 1. **`fetchAgentConfig()`** — backend'dan kamera/shlagbaum sozlamalarini olishga
    bir marta harakat qiladi (`updateAgentConfig()` orqali global holatga
    yoziladi va konsolda `"Konfiguratsiya backend dan olindi: ..."` logi
@@ -119,6 +193,91 @@ npm start
    bo'lsa, ularni bir marta qayta yuborishga harakat qiladi.
 3. **`startAgent()`** — to'rtta mustaqil oqimni (`Promise.all`) ishga
    tushiradi: Kirish, Chiqish, Navbat, Konfiguratsiya.
+
+## Bitta nusxa kafolati (`lock/agent.lock`)
+
+s-agent shu kompyuterda **tasodifan ikki marta** ishga tushirilishining
+oldini oladi — masalan, texnik xodim TeamViewer orqali qo'lda qayta ishga
+tushirmoqchi bo'lsa, lekin eski nusxa PM2 orqali fonda allaqachon ishlab
+turgan bo'lsa. Ikkita nusxa bir vaqtda bitta kameraga ulanishi chalkashlik
+va xatolarga olib kelishi mumkin — shuni oldini olish uchun (`lock.ts`):
+
+1. **Ishga tushganda** (`index.ts` eng boshida, backend'ga birinchi so'rov
+   yuborishdan OLDIN) — `lock/agent.lock` fayli bor-yo'qligi tekshiriladi:
+   - **Fayl bor va undagi PID hali jonli** (`process.kill(pid, 0)` — signal
+     yubormasdan, faqat jarayon mavjudligini tekshiradi) → aniq xato bilan
+     darhol to'xtaydi: `"s-agent ALLAQACHON ishlab turibdi (PID: X)"`,
+     `process.exit(1)`.
+   - **Fayl bor, lekin undagi PID endi jonli emas** (masalan avvalgi
+     nusxa kutilmagan tarzda qulagan — "eskirgan" lock) → buni aniq log
+     bilan bildirib (`"Eskirgan lock fayl topildi..."`), eski faylni
+     almashtirib, **oddiy davom etadi**.
+   - **Fayl umuman yo'q** → joriy PID bilan yangi lock fayl yoziladi.
+2. **To'xtaganda** — graceful shutdown (`SIGINT`/`SIGTERM`) paytida ham,
+   kutilmagan xato (`uncaughtException`/`unhandledRejection`/fatal xato)
+   paytida ham, `releaseLock()` chaqirilib, lock fayl o'chiriladi — lekin
+   **faqat agar u haqiqatan ham shu jarayonning o'zi tomonidan yozilgan
+   bo'lsa** (fayldagi PID joriy PID bilan solishtiriladi), boshqa (yangiroq)
+   nusxaning lockini bexosdan bosib ketmaslik uchun.
+
+> Agar dastur kutilmagan tarzda qulab, lock faylni o'chirib ulgurmasa —
+> muammo emas: keyingi ishga tushirishda bu "eskirgan lock" sifatida
+> to'g'ri aniqlanadi (1-band, 2-holat) va avtomatik almashtiriladi.
+
+## Kutilmagan xatolar va graceful shutdown
+
+`index.ts` quyidagi holatlarni alohida boshqaradi:
+
+- **`uncaughtException`** — hech qachon ushlanmagan sinxron xato. Node'ning
+  o'z tavsiyasiga ko'ra, bunday holatda dasturni "davom ettirishga" urinish
+  xavfli (jarayon noaniq holatda qolgan bo'lishi mumkin) — shu sabab bu
+  yerda hech qanday tozalash urinilmaydi: xato aniq loglanadi
+  (`"KUTILMAGAN XATO: ..."`) va **darhol** `process.exit(1)` chaqiriladi.
+- **`unhandledRejection`** — hech kim `.catch()` qilmagan rad etilgan
+  Promise. Xuddi yuqoridagidek: loglanadi (`"ISHLANMAGAN PROMISE
+  XATOSI: ..."`) va `process.exit(1)`.
+- Ikkalasida ham jarayon o'zi qayta ko'tarilmaydi — buni **PM2** qiladi
+  (yuqoridagi "Avtostart va avtomatik qayta ko'tarilish" bo'limiga qarang).
+  Qayta ko'tarilganda `index.ts` har doim ishga tushish jarayonini
+  boshidan boshlaydi — konfiguratsiya backend'dan **qaytadan** olinadi.
+
+**`SIGINT`/`SIGTERM`** kelganda esa (masalan `pm2 stop`, `pm2 restart`, yoki
+operatsion tizim o'chirilishi) — bular haqiqiy "graceful shutdown"
+so'rovlari, shu sabab boshqacha ishlanadi:
+
+1. `stopAgent()` chaqiriladi — bu barcha to'rtta oqimni (Kirish, Chiqish,
+   Navbat, Konfiguratsiya) va Live View'ni to'xtatishga signal beradi.
+2. **Barcha hozir kutayotgan ichki `sleep()` chaqiruvlari darhol
+   uyg'onadi** (`agent.ts` dagi `shutdownEmitter` orqali) — aks holda
+   `watchConfig` (60s) yoki `watchQueue` (30s) kabi oqimlar shutdown
+   paytida hali ham uzoq vaqt "uxlab" yotgan bo'lardi va graceful
+   shutdown haqiqatda tez bo'lmasdi.
+3. Barcha oqimlar toza tugashini kutamiz (odatda 2-3 soniya — faqat
+   `camera.ts`ning o'z 5 soniyalik qattiq timeout'i bilan chegaralangan,
+   agar aynan shu paytda kameraga so'rov ishlab turgan bo'lsa), lekin
+   **abadiy kutib qolmaslik uchun 8 soniyalik xavfsizlik chegarasi** bilan
+   (`SHUTDOWN_SAFETY_TIMEOUT_MS`).
+4. Toza tugagach (yoki xavfsizlik chegarasi ishga tushsa) —
+   `process.exit(0)`.
+
+> **PM2 bilan mos kelishi:** PM2'ning standart `kill_timeout` (1.6s) bu
+> jarayon uchun juda qisqa bo'lardi — `ecosystem.config.js`da
+> `kill_timeout: 10000` ga oshirilgan, shunda PM2 bizni yarim yo'lda
+> majburan (`SIGKILL`) o'ldirib qo'ymaydi.
+
+## Log rotatsiyasi
+
+`logger.ts` endi **winston** + **winston-daily-rotate-file** orqali
+ishlaydi (avval oddiy `fs.appendFile` bilan bitta cheksiz o'sadigan
+`logs/agent.log` fayliga yozilardi):
+
+- Har kuni **yangi fayl**: `logs/agent-2026-07-14.log`, ertasiga
+  `logs/agent-2026-07-15.log` va h.k.
+- **14 kundan eski fayllar avtomatik o'chiriladi** (`maxFiles: '14d'`).
+- Oraliq (joriy bo'lmagan) fayllar avtomatik `.gz` qilib siqiladi
+  (`zippedArchive: true`) — disk joyini tejash uchun.
+- Log qatori formati **o'zgarmadi**: `[ISO vaqt] [DARAJA] xabar` — konsolga
+  ham, faylga ham bir xil ko'rinishda yoziladi.
 
 ## Ishlash mantig'i
 
@@ -153,6 +312,32 @@ Har ikkala oqim ham quyidagi mantiqni bajaradi:
      oshiriladi).
 4. Harakatdan keyin 5 soniya "sovish" pauzasi qo'yiladi — bitta mashina uchun
    qayta-qayta ishga tushmasligi uchun.
+
+## Kameradan kadr olish — universal (`camera.ts`)
+
+`captureFrame()` javobni **stream** sifatida ochadi va kelayotgan baytlar
+ichidan birinchi to'liq JPEG kadrni (`0xFFD8` SOI ... `0xFFD9` EOI markerlari
+orqali) topgan zahoti ulanishni **darhol** yopadi — javobning o'z-o'zidan
+tugashini kutmaydi. Shu sabab bir xil `captureFrame()` ikkalasi bilan ham
+bab-baravar ishlaydi:
+
+- oddiy bitta-rasmli endpoint (masalan `/snapshot.jpg`) — javob baribir tez
+  tugaydi, farqi yo'q;
+- hech qachon o'z-o'zidan tugamaydigan uzluksiz MJPEG stream (masalan
+  `/video`) — bunday holatda multipart chegara (boundary) formatini bilish
+  yoki taxmin qilish shart emas, chunki JPEG bayt markerlarining o'zi
+  ko'rsatkich vazifasini bajaradi.
+
+Bu — Live View bilan **bitta xil** kamera URL'ni ishlatish imkonini beradi:
+avval `camera_entry_url`/`camera_exit_url` ikkita turli maqsad (oddiy kadr
+olish va uzluksiz Live View) uchun ziddiyatli edi (biriga mos URL
+ikkinchisini buzardi) — endi ikkalasi ham bir xil `/video` (yoki xohlasa
+`/snapshot.jpg`) bilan muammosiz ishlaydi, alohida backend maydoni yoki
+qo'lda URL almashtirish shart emas.
+
+Qattiq (wall-clock) 5 soniyalik `AbortController` timeout ham saqlanadi —
+agar hech qachon to'liq JPEG kadr yig'ilmasa (kamera butunlay javob bermasa),
+so'rov abadiy osilib qolmaydi.
 
 ## Shlagbaumni ochishdan oldingi ikki bosqichli himoya
 
@@ -327,6 +512,12 @@ yuboriladi:
   urinaveradi.
 - **Shlagbaum ulanmagan/xato bo'lsa:** signal yuborilmaydi, log yoziladi,
   qolgan jarayon davom etadi.
+- **Butun `s-agent` jarayoni qulab tushsa** (masalan kutilmagan xato,
+  `kill -9`, yoki kompyuter qayta yuklanishi): PM2 uni avtomatik qayta
+  ishga tushiradi (yuqoridagi "Avtostart va avtomatik qayta ko'tarilish"
+  bo'limiga qarang) — qayta ko'tarilganda `index.ts` har doim konfiguratsiyani
+  backend'dan **qaytadan** oladi, hech qanday eski/keshlangan holatga
+  tayanmaydi.
 - Barcha xatolar konsolga **va** `logs/agent.log` fayliga yoziladi —
   `errors.ts` dagi `describeError()` orqali (Node'ning "localhost"ga
   ulanishda ikkala IPv4/IPv6 ham rad etilgan holatlarida xato `.message`si
@@ -337,6 +528,80 @@ yuboriladi:
 Ushbu kompyuterda (haqiqiy `s-backend` va MySQL bazasi bilan, real
 `GET /api/agent/config` orqali):
 
+- **Bitta nusxa kafolati (`lock/agent.lock`):** real ikkita alohida jarayon
+  bilan sinaldi (birinchisi ishga tushirilib, ustiga ikkinchisi):
+  - 1-nusxa ishlab turganda 2-nusxa ishga tushirilganda — **darhol**
+    (backend'ga so'rov yuborilmasdanoq) `"s-agent ALLAQACHON ishlab
+    turibdi (PID: ...)"` deb `exit code 1` bilan to'xtadi,
+  - 1-nusxa `SIGTERM` bilan to'xtatilgach, `lock/` papka **bo'shab qoldi**
+    (lock fayl to'g'ri o'chirildi), va shundan keyin yangi (2-) nusxa
+    **muvaffaqiyatli** ishga tushdi, o'z PID'ini yangi lock faylga yozdi,
+  - **eskirgan lock** holati sinaldi: mavjud bo'lmagan PID (`999999`) bilan
+    qo'lda lock fayl yaratilib, s-agent ishga tushirildi — buni to'g'ri
+    `"Eskirgan lock fayl topildi (PID: 999999 — jarayon mavjud emas),
+    almashtirilmoqda"` deb aniqlab, **muvaffaqiyatli davom etdi** va yangi
+    lock faylni o'z PID'i bilan yozdi.
+- **PM2 orqali avtomatik qayta ko'tarilish (macOS'da sinaldi):** haqiqiy
+  `s-backend` ishlab turgan holda `pm2 start ecosystem.config.js` bilan
+  ishga tushirilib, keyin ishlab turgan jarayon **`kill -9`** bilan
+  majburan o'ldirildi:
+  - PM2 ~3-4 soniyadan so'ng (`exp_backoff_restart_delay`) uni **yangi
+    PID** bilan avtomatik qayta ko'tardi (`restart_time` 0 → 1),
+  - yangi jarayonning ilk loglari eskisi bilan **so'zma-so'z bir xil**
+    ketma-ketlikni ko'rsatdi: `"Konfiguratsiya backend dan olindi: ..."`
+    (kamera URL, shlagbaum sozlamalari) → `"AutoStoyanka Local Agent ishga
+    tushdi"` → `"Live view: Socket.IO ulanishi o'rnatildi"` — ya'ni
+    konfiguratsiya va Live View ulanishi **hech qanday eski holatga
+    tayanmasdan, to'liq qaytadan** tiklandi,
+  - `pm2 startup` buyrug'i macOS'da to'g'ri `launchd` tizimini aniqlab,
+    kerakli `sudo` buyrug'ini chiqarishi ham tasdiqlandi (buyruqning o'zi
+    ishga tushirilmadi — bu operatorning o'zi bajarishi kerak bo'lgan
+    bir martalik sozlash qadami).
+  - Windows uchun `pm2-windows-startup` paketi mavjudligi va aniq
+    buyruqlari (`pm2-startup install`) npm registridan tasdiqlandi — lekin
+    Windows'ning o'zida jismoniy test o'tkazilmadi (bu kompyuter macOS).
+- **`uncaughtException` → PM2 avtomatik qayta ko'tarish (macOS'da,
+  haqiqiy PM2 bilan):** vaqtinchalik sun'iy xato (`throw new Error(...)`)
+  qo'shib, PM2 orqali ishga tushirildi. Har 2 soniyada xato chiqib turdi —
+  har safar:
+  - `"KUTILMAGAN XATO: ..."` aniq loglandi va jarayon darhol chiqib ketdi,
+  - PM2 uni **avtomatik** qayta ko'tardi (`restart_time` ketma-ket oshib
+    bordi: 0→5+), **hech qachon "voz kechmadi"**,
+  - **har safar** konfiguratsiya backend'dan qaytadan olindi (loglarda
+    har bir qayta ko'tarilishda `"Konfiguratsiya backend dan olindi: ..."`
+    qaytarilib turdi),
+  - `exp_backoff_restart_delay` ishlashi ham vaqt farqlaridan tasdiqlandi:
+    ketma-ket qulashlar orasidagi kutish 9s → 12s → 17s ga oshib bordi
+    (eksponensial backoff, CPU'ni band qilmaslik uchun).
+  - Test kodi keyin butunlay olib tashlandi.
+- **Graceful shutdown vaqti (SIGINT va SIGTERM, alohida-alohida sinaldi):**
+  ishlab turgan real jarayonga `kill -TERM` va alohida `kill -INT`
+  yuborilib, aniq vaqt tamg'alari bilan o'lchandi:
+  - `watchQueue`/`watchConfig` — shutdown signalidan **millisekundlar
+    ichida** to'xtadi (avval bu 30-60 soniyagacha cho'zilishi mumkin edi —
+    interruptible `sleep()` tuzatilgandan keyin),
+  - butun jarayon **~2-3 soniyada** toza tugadi (`"Local Agent to'xtadi"`),
+    faqat o'sha payt kamerada ishlab turgan `captureFrame()`ning o'z ichki
+    5 soniyalik qattiq timeout'ini kutib — bu 8 soniyalik xavfsizlik
+    chegarasidan ancha tezroq, ya'ni "toza" yo'l orqali tugadi, xavfsizlik
+    chegarasiga tayanmadi.
+  - Test paytida bitta nozik xato ham topilib tuzatildi: agar `sleep()`
+    chaqiruvi shutdown signali berilgandan **keyin** boshlangan bo'lsa
+    (masalan xato-blokidagi kutish), u eski "bir martalik" hodisani
+    ushlab qololmay, to'liq muddatni kutib qolardi — endi `sleep()`
+    boshida `running` bayrog'i tekshiriladi va darhol qaytadi.
+- **Log rotatsiyasi:** ishga tushirilib, `logs/agent-2026-07-14.log`
+  (joriy kun sanasi bilan) to'g'ri yaratilgani va formatning
+  (`[ISO vaqt] [DARAJA] xabar`) o'zgarmaganligi tasdiqlandi.
+- **Kameradan kadr olish (`captureFrame`), universal:** haqiqiy kameraning
+  uzluksiz MJPEG stream endpointi (`/video`) ustida to'g'ridan-to'g'ri
+  (Live View'siz, alohida) sinaldi — 4 marta ketma-ket, har safar 0.5–2s
+  ichida to'g'ri JPEG (SOI/EOI markerlari mos) qaytardi. So'ng soxta MJPEG
+  kamera bilan **captureFrame() va uzluksiz Live View tomoshabinini bir xil
+  kamera URL'iga BIR VAQTDA** ulab sinaldi: Live View 3 soniya davomida
+  uzluksiz oqim oldi, shu bilan bir vaqtda captureFrame() 3 marta muvaffaqiyatli
+  alohida kadr oldi — hech qanday to'qnashuvsiz (kamerada bir vaqtning o'zida
+  2 ta mustaqil ulanish kuzatildi).
 - **Konfiguratsiya yuklash:** ishga tushganda konsolda
   `"Konfiguratsiya backend dan olindi: ..."` logi chiqishi tasdiqlandi.
 - **Dinamik yangilanish:** ishlab turgan agent davomida bazadagi
@@ -408,10 +673,13 @@ ochilmaydi, faqat `s-backend` orqali (ichki, `localhost`) chaqiriladi.
 **s-agent:**
 - `src/camera.ts`, `src/motion.ts`, `src/barrier.ts`, `src/server.ts`,
   `src/queueProcessor.ts`, `src/configFetcher.ts`, `src/agentConfig.ts`,
-  `src/liveView.ts` (yangi), `src/config.ts`, `src/errors.ts`, `src/logger.ts`,
-  `src/agent.ts`, `src/index.ts`
-- `.env`, `.env.example`, `package.json` (`socket.io-client` qo'shildi),
-  `tsconfig.json`, `.gitignore`, `README.md`
+  `src/liveView.ts`, `src/lock.ts` (yangi), `src/config.ts`, `src/errors.ts`,
+  `src/logger.ts`, `src/agent.ts`, `src/index.ts`
+- `.env`, `.env.example`, `package.json` (`socket.io-client`, `winston`,
+  `winston-daily-rotate-file` qo'shildi, `pm2:*` skriptlari),
+  `ecosystem.config.js` (PM2 konfiguratsiyasi — `kill_timeout` oshirildi),
+  `tsconfig.json`, `.gitignore` (yangi log formati va `lock/` qo'shildi),
+  `README.md`
 
 **s-backend:**
 - `src/modules/parking/parking.service.ts`,

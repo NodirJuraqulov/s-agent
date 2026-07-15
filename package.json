@@ -6,7 +6,12 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsx watch src/index.ts"
+    "dev": "tsx watch src/index.ts",
+    "pm2:start": "pm2 start ecosystem.config.js",
+    "pm2:stop": "pm2 stop s-agent",
+    "pm2:restart": "pm2 restart s-agent",
+    "pm2:logs": "pm2 logs s-agent",
+    "pm2:status": "pm2 status s-agent"
   },
   "dependencies": {
     "axios": "^1.7.9",
@@ -14,7 +19,9 @@
     "form-data": "^4.0.1",
     "serialport": "^12.0.0",
     "sharp": "^0.35.3",
-    "socket.io-client": "^4.8.3"
+    "socket.io-client": "^4.8.3",
+    "winston": "^3.19.0",
+    "winston-daily-rotate-file": "^5.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
