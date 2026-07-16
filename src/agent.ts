@@ -17,6 +17,8 @@ const HEARTBEAT_INTERVAL_MS = 30000;
 
 let running = true;
 
+const key = 2c608f0f8dbe7db0cb338d14c5b05b9f991ed5da43e024e74f98f099573fcf8b
+
 
 // Har bir turning ENG SO'NGGI captureFrame() urinishi muvaffaqiyatli
 // bo'lgan-bo'lmaganini saqlaydi — heartbeat shu qiymatlarni backend'ga
