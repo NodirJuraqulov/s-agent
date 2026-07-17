@@ -2,9 +2,6 @@ import { SerialPort } from 'serialport';
 import { logger } from './logger';
 import { describeError } from './errors';
 
-// Port yo'liga qarab ochilgan portlarni keshlaymiz — Kirish va Chiqish
-// alohida-alohida (yoki bir xil) portda bo'lishi mumkin, konfiguratsiya
-// backend'dan dinamik kelgani uchun portni har safar ochib o'tirmaymiz.
 const openPorts = new Map<string, SerialPort>();
 
 function getOrOpenPort(portPath: string): SerialPort | null {
@@ -33,11 +30,6 @@ function getOrOpenPort(portPath: string): SerialPort | null {
   }
 }
 
-/**
- * Shlagbaumga signal beradi: portPath ochiladi (yoki keshdan olinadi),
- * openSeconds soniya ochiq turadi, so'ng yopiladi. Port ko'rsatilmagan yoki
- * ulanmagan bo'lsa — log yozib, jim davom etadi (dastur to'xtamaydi).
- */
 export async function openBarrier(portPath: string | undefined, openSeconds: number): Promise<void> {
   if (!portPath) {
     logger.warn('Shlagbaum porti sozlanmagan — signal yuborilmadi, jarayon davom etmoqda');

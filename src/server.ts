@@ -9,12 +9,6 @@ import { describeError } from './errors';
 
 export type ParkingEventType = 'entry' | 'exit';
 
-// s-backend'ga har bir HTTP so'rov (postToServer/verifyPlate) shu vaqtdan
-// ko'p kutmaydi. index.ts'dagi SHUTDOWN_SAFETY_TIMEOUT_MS ATAYLAB shu
-// qiymatdan KATTA qilib hisoblanadi (shu konstantadan import qilib) — aks
-// holda shutdown paytida hali javob kutayotgan so'rov ma'lumot yo'qotmasdan
-// yakunlanishga (yoki navbatga saqlanishga) ulgurmay, process majburan
-// o'chirilib qolishi mumkin edi.
 export const BACKEND_REQUEST_TIMEOUT_MS = 15000;
 
 export interface EntryResult {
@@ -25,13 +19,6 @@ export interface EntryResult {
     id?: number;
     plate_number?: string;
   };
-  // `detected: false` bo'lganda SABABNI aniq ko'rsatadi — agent.ts buni
-  // to'g'ri, chalg'itmaydigan log yozish uchun ishlatadi:
-  //  - 'ocr_failed'    — so'rov muvaffaqiyatli bajarildi, lekin OCR nomer topmadi (haqiqiy OCR muammosi)
-  //  - 'auth_error'    — backend 401 qaytardi (Agent API Key noto'g'ri/eskirgan)
-  //  - 'duplicate'     — backend 409 qaytardi (mashina allaqachon stoyankada)
-  //  - 'client_error'  — boshqa qayta urinishga arzimaydigan 4xx (masalan 400/422)
-  //  - 'network_error' — tarmoq/timeout/5xx, rasm navbatga saqlandi (`queued: true`)
   reason?: 'ocr_failed' | 'auth_error' | 'duplicate' | 'client_error' | 'network_error';
 }
 
@@ -55,11 +42,6 @@ const LABELS: Record<ParkingEventType, string> = {
 
 export const QUEUE_DIR = path.join(process.cwd(), 'queue');
 
-/**
- * Xato qayta urinishga arziydimi? Server javob bermagan (tarmoq/timeout) yoki
- * 5xx qaytargan bo'lsa — ha (vaqtinchalik muammo). 401/409 kabi 4xx xatolar
- * — yo'q, chunki qayta urinish ularni tuzatmaydi (masalan token yaroqsiz).
- */
 function isRetryableError(error: unknown): boolean {
   if (axios.isAxiosError(error)) {
     if (!error.response) {
@@ -70,7 +52,6 @@ function isRetryableError(error: unknown): boolean {
   return true;
 }
 
-/** Qayta urinishga arzimaydigan (4xx) xatoning ANIQ sababini aniqlaydi — faqat isRetryableError false qaytarganda chaqiriladi. */
 function describeNonRetryableReason(error: unknown): 'auth_error' | 'duplicate' | 'client_error' {
   if (axios.isAxiosError(error) && error.response) {
     if (error.response.status === 401) return 'auth_error';
@@ -94,7 +75,6 @@ async function saveToQueue(type: ParkingEventType, image: Buffer, capturedAt: st
   return filename;
 }
 
-/** Rasmni s-backend ga to'g'ridan-to'g'ri yuboradi (navbatga saqlamaydi, xatoni tashlaydi). */
 export async function postToServer(
   type: ParkingEventType,
   image: Buffer,
@@ -118,10 +98,6 @@ export async function postToServer(
   return response.data;
 }
 
-/**
- * Rasmni s-backend ga yuboradi. Tarmoq/5xx xatosi bo'lsa — rasmni yo'qotmaslik
- * uchun `queue/`ga saqlaydi (keyinroq `queueProcessor` orqali qayta yuboriladi).
- */
 export async function sendToServer(
   type: ParkingEventType,
   image: Buffer,
@@ -151,13 +127,6 @@ export async function sendToServer(
   }
 }
 
-/**
- * Ikkinchi (mustaqil) kadrni tekshiradi — sessiya YARATMAYDI, bazaga
- * yozmaydi, faqat OCR natijasini qaytaradi. Shlagbaumni ochishdan oldingi
- * qo'shimcha tasdiqlash (`agent.ts`) uchun ishlatiladi. Bu — navbat (queue)
- * mantig'iga kirmaydi: xato bo'lsa fail-closed tarzda "aniqlanmadi" deb
- * qaytaradi (noaniq holatda shlagbaum ochilmasligi kerak).
- */
 export async function verifyPlate(image: Buffer): Promise<VerifyResult> {
   try {
     const form = new FormData();
@@ -181,21 +150,6 @@ export async function verifyPlate(image: Buffer): Promise<VerifyResult> {
   }
 }
 
-/**
- * Backend'ga "men tirikman" signalini yuboradi — juda kichik, tez so'rov.
- * `cameraEntryOk`/`cameraExitOk` — har bir kamera turining ENG SO'NGGI
- * `captureFrame()` urinishi muvaffaqiyatli bo'lgan-bo'lmaganini bildiradi
- * (`agent.ts` dagi `lastCameraEntryOk`/`lastCameraExitOk`) — hali hech
- * qanday urinish bo'lmagan bo'lsa `null`. `failedQueueCount` — `queue/failed/`
- * papkasida qolib ketgan (MAX_ATTEMPTS marta yuborilmagan) so'rovlar soni,
- * shunda operator navbat orqasida to'planib qolgan yo'qolgan hodisalar
- * borligini (papkani qo'lda tekshirmasdan) heartbeat orqali bilib oladi.
- * Shunda backend/operator s-agent DASTURI ishlab turgani bilan birga,
- * KAMERANING o'zi ham ulanganligini bilib oladi. Xato bo'lsa tashlaydi —
- * chaqiruvchi (`agent.ts`) buni faqat log yozib o'tkazib yuborishi kerak,
- * chunki heartbeat vaqtincha yetib bormasligi tizimni to'xtatadigan sabab
- * emas.
- */
 export async function sendHeartbeat(
   cameraEntryOk: boolean | null,
   cameraExitOk: boolean | null,

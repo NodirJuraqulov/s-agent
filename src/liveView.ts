@@ -13,8 +13,6 @@ interface ActiveStream {
   abort: () => void;
 }
 
-// Kirish/Chiqish uchun alohida yozuv — bittasini to'xtatish ikkinchisiga
-// ta'sir qilmaydi (xuddi watchEntry/watchExit kabi mustaqil).
 const activeStreams = new Map<CameraType, ActiveStream>();
 
 let socket: Socket | null = null;
@@ -69,8 +67,6 @@ async function handleLiveViewStart(type: CameraType): Promise<void> {
     `Live view (${type}): kameraga ulanish urinilmoqda: url=${cameraUrl}, username=${username}, password_length=${password.length}`
   );
 
-  // 'live_view:stop' javob kelmasdan oldin ham yetib kelishi mumkin —
-  // shu holatda javob kelgach oqimni darhol yopamiz (pastga qarang).
   let stopped = false;
   const controller = new AbortController();
   activeStreams.set(type, {
@@ -93,8 +89,6 @@ async function handleLiveViewStart(type: CameraType): Promise<void> {
       return;
     }
 
-    // MUHIM: backend birinchi chunk'dan OLDIN shuni kutadi (10s ack-timeout) —
-    // shuning uchun kamera javob bergan zahoti, hech narsani kutmasdan yuboramiz.
     socket?.emit('live_view:started', {
       type,
       content_type: response.headers['content-type'] ?? 'application/octet-stream',
@@ -126,7 +120,6 @@ function handleLiveViewStop(type: CameraType): void {
   stopStream(type);
 }
 
-/** Backend bilan Live View uchun Socket.IO ulanishini o'rnatadi. */
 export function startLiveView(): void {
   socket = io(config.serverUrl, {
     auth: { agentKey: config.agentApiKey },
@@ -142,9 +135,6 @@ export function startLiveView(): void {
 
   socket.on('disconnect', (reason: string) => {
     logger.warn(`Live view: Socket.IO uzildi (${reason}) — faol kamera oqimlari tozalanmoqda`);
-    // Backend o'z tomonidan barcha tomoshabinlarni yakunlaydi (onAgentDisconnected) —
-    // biz esa faqat OZ tomonimizdagi ochiq HTTP kamera ulanishlarini yopamiz
-    // (xotira/resurs sizib chiqishining oldini olish uchun).
     stopAllStreams();
   });
 
@@ -159,7 +149,6 @@ export function startLiveView(): void {
   });
 }
 
-/** Socket.IO ulanishini va barcha faol kamera oqimlarini to'xtatadi. */
 export function stopLiveView(): void {
   stopAllStreams();
   socket?.disconnect();

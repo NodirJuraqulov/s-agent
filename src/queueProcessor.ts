@@ -18,8 +18,6 @@ interface QueueEntry {
 async function listQueueFiles(): Promise<string[]> {
   try {
     const files = await fs.readdir(QUEUE_DIR);
-    // Fayl nomi <epochMs>-<uuid>.json ko'rinishida — lexicographic sort
-    // eng eski so'rovni birinchi qo'yadi.
     return files.filter((f) => f.endsWith('.json')).sort();
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -29,13 +27,11 @@ async function listQueueFiles(): Promise<string[]> {
   }
 }
 
-/** Navbatda kutayotgan (hali yuborilmagan) so'rovlar sonini qaytaradi. */
 export async function getQueueSize(): Promise<number> {
   const files = await listQueueFiles();
   return files.length;
 }
 
-/** `failed/`ga tushib qolgan (MAX_ATTEMPTS marta yuborilmagan) so'rovlar sonini qaytaradi — heartbeat orqali backend/operator ogohlantirilishi uchun. */
 export async function getFailedQueueSize(): Promise<number> {
   try {
     const files = await fs.readdir(FAILED_DIR);
@@ -54,13 +50,6 @@ async function moveToFailed(filename: string, entry: QueueEntry): Promise<void> 
   await fs.unlink(path.join(QUEUE_DIR, filename));
 }
 
-/**
- * Parse qilib bo'lmaydigan (buzilgan) navbat faylini `corrupted/`ga
- * ko'chiradi. Buni QUEUE_DIR'dan chiqarib yubormasak, `entry` hech qachon
- * valid bo'lmagani uchun fayl na yuborilishi, na 5-urinishdan keyin
- * `failed/`ga tushishi mumkin — natijada har 30 soniyada abadiy qayta
- * o'qishga urinilib, abadiy xato loglaydi.
- */
 async function moveToCorrupted(filename: string): Promise<void> {
   await fs.mkdir(CORRUPTED_DIR, { recursive: true });
   await fs.rename(path.join(QUEUE_DIR, filename), path.join(CORRUPTED_DIR, filename));
@@ -107,12 +96,6 @@ async function processQueueFile(filename: string): Promise<void> {
   }
 }
 
-/**
- * Navbatdagi barcha so'rovlarni eng eskisidan boshlab ketma-ket qayta
- * yuborishga harakat qiladi. Muvaffaqiyatli bo'lsa fayl o'chiriladi;
- * muvaffaqiyatsiz bo'lsa `attempts` oshirilib fayl saqlanadi (5 martadan
- * keyin `queue/failed/`ga ko'chiriladi).
- */
 export async function processQueue(): Promise<void> {
   const files = await listQueueFiles();
 

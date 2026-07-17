@@ -8,9 +8,6 @@ const lineFormat = winston.format.printf(({ level, message, timestamp }) => {
   return `[${timestamp}] [${String(level).toUpperCase()}] ${message}`;
 });
 
-// Har kuni yangi fayl (agent-2026-07-14.log), 14 kundan eski fayllar
-// avtomatik o'chiriladi (va oraliq fayllar .gz qilib siqiladi) — log
-// papkasi cheksiz o'sib ketmasligi uchun.
 const fileTransport = new DailyRotateFile({
   dirname: logDir,
   filename: 'agent-%DATE%.log',

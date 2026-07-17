@@ -14,7 +14,6 @@ interface RawAgentConfig {
   barrier_open_seconds: number;
 }
 
-/** Backend'dan agent konfiguratsiyasini (kamera URL'lari, shlagbaum) oladi. */
 export async function fetchAgentConfig(): Promise<AgentConfig> {
   const response = await axios.get<RawAgentConfig>(`${config.serverUrl}/api/agent/config`, {
     headers: {

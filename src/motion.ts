@@ -3,13 +3,6 @@ import sharp from 'sharp';
 const FRAME_WIDTH = 320;
 const FRAME_HEIGHT = 240;
 
-/**
- * Oldingi kadr bilan hozirgi kadrni grayscale piksel farqi orqali solishtiradi.
- * Pure function — holatni o'zida saqlamaydi: previousFrame chaqiruvchi tomonidan
- * uzatiladi va saqlanadi. Shu tufayli bir nechta mustaqil oqim (masalan Kirish
- * va Chiqish kameralari) bir-birining holatini buzmasdan parallel ishlatilishi
- * mumkin.
- */
 export async function detectMotion(
   currentFrame: Buffer,
   previousFrame: Buffer | null,

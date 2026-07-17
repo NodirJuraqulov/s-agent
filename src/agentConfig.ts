@@ -1,21 +1,11 @@
 import { config } from './config';
 import { logger } from './logger';
 
-/**
- * Backend'dan (`GET /api/agent/config`) olinadigan, runtime davomida
- * o'zgarishi mumkin bo'lgan sozlamalar — kamera URL'lari va shlagbaum
- * konfiguratsiyasi. Bular endi `.env`da emas: Super Admin web panelda
- * o'zgartirsa, s-agent bir daqiqa ichida (`watchConfig`, `agent.ts`)
- * avtomatik yangi qiymatlarni oladi.
- */
 export type BarrierMode = 'single' | 'separate';
 
 export interface AgentConfig {
-  // Backend'da hali sozlanmagan bo'lishi mumkin (yangi tashkilot) — shu sabab null.
   cameraEntryUrl: string | null;
   cameraExitUrl: string | null;
-  // Kamera login/paroli ham endi backend'da (shifrlangan holda) saqlanadi —
-  // sozlanmagan bo'lsa null, shu holda config.ts dagi local fallback ishlatiladi.
   cameraUsername: string | null;
   cameraPassword: string | null;
   barrierEnabled: boolean;
@@ -27,17 +17,10 @@ export interface AgentConfig {
 
 let current: AgentConfig | null = null;
 
-/** Konfiguratsiya hech bo'lmaganda bir marta muvaffaqiyatli yuklanganmi? */
 export function hasAgentConfig(): boolean {
   return current !== null;
 }
 
-/**
- * Joriy konfiguratsiyani qaytaradi. Hali hech qachon muvaffaqiyatli
- * yuklanmagan bo'lsa xato tashlaydi — chaqiruvchi (watchEntry/watchExit)
- * buni o'zining mavjud try/catch + qayta urinish logikasi orqali tabiiy
- * ravishda kutib turadi.
- */
 export function getAgentConfig(): AgentConfig {
   if (!current) {
     throw new Error("Agent konfiguratsiyasi hali backend'dan yuklanmagan");
@@ -45,13 +28,6 @@ export function getAgentConfig(): AgentConfig {
   return current;
 }
 
-/**
- * Berilgan turi (Kirish/Chiqish) uchun qaysi shlagbaum portidan foydalanish
- * kerakligini aniqlaydi. `barrier_mode === "separate"` bo'lsagina Chiqish
- * o'zining alohida portidan foydalanadi — aks holda (`"single"` yoki
- * belgilanmagan) ikkalasi ham Kirish portini ishlatadi (backend'dagi
- * `settingsService.testBarrier` bilan bir xil mantiq).
- */
 export function resolveBarrierPort(agentConfig: AgentConfig, type: 'entry' | 'exit'): string | undefined {
   if (agentConfig.barrierMode === 'separate' && type === 'exit') {
     return agentConfig.barrierExitPort;
@@ -59,11 +35,6 @@ export function resolveBarrierPort(agentConfig: AgentConfig, type: 'entry' | 'ex
   return agentConfig.barrierEntryPort;
 }
 
-/**
- * Kamera uchun ishlatiladigan HTTP Basic Auth login/parolini aniqlaydi:
- * backend'da sozlangan bo'lsa o'sha ishlatiladi, aks holda `.env` dagi
- * local fallback (`CAMERA_USERNAME`/`CAMERA_PASSWORD`).
- */
 export function resolveCameraAuth(agentConfig: AgentConfig): { username: string; password: string } {
   return {
     username: agentConfig.cameraUsername ?? config.cameraUsername,
@@ -71,7 +42,6 @@ export function resolveCameraAuth(agentConfig: AgentConfig): { username: string;
   };
 }
 
-/** Yangi konfiguratsiyani global holatga yozadi va qisqacha xulosani logga chiqaradi. */
 export function updateAgentConfig(newConfig: AgentConfig): void {
   current = newConfig;
 

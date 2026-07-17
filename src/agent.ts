@@ -17,12 +17,6 @@ const HEARTBEAT_INTERVAL_MS = 30000;
 
 let running = true;
 
-
-// Har bir turning ENG SO'NGGI captureFrame() urinishi muvaffaqiyatli
-// bo'lgan-bo'lmaganini saqlaydi — heartbeat shu qiymatlarni backend'ga
-// yuboradi (dastur ishlab tursa ham, kameraning o'zi uzilib qolgan holatni
-// aniqlash uchun). `null` — hali birorta ham captureFrame() urinilmagan
-// (dastur endigina ishga tushgan).
 let lastCameraEntryOk: boolean | null = null;
 let lastCameraExitOk: boolean | null = null;
 
@@ -34,12 +28,6 @@ function setCameraHealth(type: ParkingEventType, ok: boolean): void {
   }
 }
 
-/**
- * `captureFrame()`ni chaqiradi va natijasini (muvaffaqiyatli/xato) darhol
- * `lastCameraEntryOk`/`lastCameraExitOk` ga yozib qo'yadi — xato bo'lsa
- * qayta tashlaydi, chunki chaqiruvchi (`watchCamera`) buni odatdagidek
- * o'zining tashqi `catch` blokida logga yozib, qayta urinishi kerak.
- */
 async function captureFrameTracked(
   type: ParkingEventType,
   cameraUrl: string,
@@ -56,18 +44,10 @@ async function captureFrameTracked(
   }
 }
 
-// stopAgent() chaqirilganda BARCHA hozir kutayotgan sleep() lar darhol
-// uyg'onishi uchun — aks holda watchConfig (60s) yoki watchQueue (30s) kabi
-// oqimlar shutdown paytida hali ham uzoq vaqt "uxlab" yotgan bo'lishi mumkin
-// edi, va graceful shutdown haqiqatda tez bo'lmasdi.
 const shutdownEmitter = new EventEmitter();
 shutdownEmitter.setMaxListeners(0);
 
 function sleep(ms: number): Promise<void> {
-  // `running` allaqachon false bo'lsa (masalan xato-blokidagi kutish
-  // shutdown signali ALLAQACHON berilgandan KEYIN boshlangan bo'lsa) —
-  // "shutdown" hodisasi endi hech qachon qayta kelmaydi, shuning uchun
-  // uni kutib o'tirmasdan darhol qaytamiz.
   if (!running) {
     return Promise.resolve();
   }
@@ -85,24 +65,12 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
-/** Asosiy sikllarni to'xtatadi (SIGINT/SIGTERM kabi holatlarda graceful shutdown uchun). */
 export function stopAgent(): void {
   running = false;
   stopLiveView();
   shutdownEmitter.emit('shutdown');
 }
 
-/**
- * Shlagbaumni ochishdan oldingi ikki bosqichli himoya:
- *  1) Birinchi kadrning ishonch darajasi (`confidence`) BARRIER_CONFIDENCE_THRESHOLD
- *     dan past bo'lsa — shlagbaum umuman ochilmaydi (sessiya baribir bazaga
- *     yozilgan, buni backend allaqachon qilib bo'lgan).
- *  2) Yetarli ishonchli bo'lsa ham, ~1 soniyadan keyin YANA bitta mustaqil
- *     kadr olinib, `verifyPlate()` orqali (sessiya YARATMASDAN) tekshiriladi.
- *     Faqat ikkala kadr ham BIR XIL nomerni va yetarli ishonchni bersa,
- *     shlagbaum ochiladi. Bu — backend'ga yuborilayotgan asosiy entry/exit
- *     so'roviga TA'SIR QILMAYDI, faqat lokal shlagbaum qaroriga tegishli.
- */
 async function confirmAndOpenBarrier(
   type: ParkingEventType,
   cameraUrl: string,
@@ -144,12 +112,6 @@ async function confirmAndOpenBarrier(
   }
 }
 
-/**
- * Bitta kamera oqimini (Kirish yoki Chiqish) kuzatadi. Har bir oqim o'zining
- * previousFrame holatini mustaqil saqlaydi — boshqa oqimga ta'sir qilmaydi.
- * Kamera URL va shlagbaum sozlamalari HAR TICKDA global (backend'dan kelgan,
- * `watchConfig` orqali yangilanadigan) konfiguratsiyadan qayta o'qiladi.
- */
 async function watchCamera(
   type: ParkingEventType,
   getCameraUrl: () => string | null,
@@ -175,10 +137,8 @@ async function watchCamera(
       if (motion) {
         logger.info(`${label}: harakat aniqlandi!`);
 
-        // 2 soniya kut (mashina to'xtasin)
         await sleep(2000);
 
-        // Yangi rasm ol (to'xtagan holat) — URL yana eng oxirgi holatidan o'qiladi
         const latestCameraUrl = getCameraUrl();
         if (!latestCameraUrl) {
           logger.error(`${label} xatosi: kamera URL hali backend'da sozlanmagan`);
@@ -190,16 +150,12 @@ async function watchCamera(
         const snapshot = await captureFrameTracked(type, latestCameraUrl, latestUsername, latestPassword);
         const capturedAt = new Date().toISOString();
 
-        // s-backend ga yuborish
         const result = await sendToServer(type, snapshot, capturedAt);
 
         if (result.detected) {
           logger.info(`${label}: nomer aniqlandi: ${result.session?.plate_number ?? "noma'lum"}`);
           await confirmAndOpenBarrier(type, latestCameraUrl, result, label);
         } else {
-          // `reason` asosida ANIQ sabab logga yoziladi — "nomer aniqlanmadi"
-          // faqat HAQIQIY OCR muammosida chiqadi, boshqa sabablarni (masalan
-          // 401/409) yashirmaydi/chalg'itmaydi.
           switch (result.reason) {
             case 'auth_error':
               logger.error(`${label}: Server autentifikatsiya xatosi (401) — Agent API Key ni tekshiring!`);
@@ -211,7 +167,6 @@ async function watchCamera(
               logger.error(`${label}: Server so'rovni rad etdi (qayta urinishga arzimaydigan xato) — texnik xodimga xabar bering`);
               break;
             case 'network_error':
-              // sendToServer o'zi "navbatga saqlandi" logini allaqachon yozgan
               break;
             case 'ocr_failed':
             default:
@@ -220,11 +175,9 @@ async function watchCamera(
           }
         }
 
-        // 5 soniya kut (bir mashina uchun qayta ishga tushmasin)
         await sleep(5000);
       }
 
-      // Keyingi tekshiruv
       await sleep(config.captureIntervalMs);
     } catch (error) {
       logger.error(`${label} xatosi: ${describeError(error)}`);
@@ -243,10 +196,6 @@ function watchExit(): Promise<void> {
   return watchCamera('exit', () => getAgentConfig().cameraExitUrl, 'Chiqish');
 }
 
-/**
- * Kirish/Chiqish oqimlaridan mustaqil: har QUEUE_CHECK_INTERVAL_MS da
- * navbatni (queue/) tekshiradi va bo'sh bo'lmasa qayta yuborishga harakat qiladi.
- */
 async function watchQueue(): Promise<void> {
   while (running) {
     await sleep(QUEUE_CHECK_INTERVAL_MS);
@@ -265,11 +214,6 @@ async function watchQueue(): Promise<void> {
   logger.info("Navbat kuzatuvi to'xtatildi");
 }
 
-/**
- * Qolgan uchta oqimdan mustaqil: har CONFIG_REFRESH_INTERVAL_MS da backend'dan
- * kamera/shlagbaum konfiguratsiyasini qayta oladi. Xato bo'lsa — eski
- * konfiguratsiya bilan davom etiladi (dastur to'xtamaydi).
- */
 async function watchConfig(): Promise<void> {
   while (running) {
     await sleep(CONFIG_REFRESH_INTERVAL_MS);
@@ -287,13 +231,6 @@ async function watchConfig(): Promise<void> {
   logger.info("Konfiguratsiya kuzatuvi to'xtatildi");
 }
 
-/**
- * Qolgan oqimlardan mustaqil: har HEARTBEAT_INTERVAL_MS da backend'ga
- * "men tirikman" signalini yuboradi — shunda operator/Super Admin panelda
- * s-agent oflayn bo'lib qolganini bilish mumkin bo'ladi. Xato bo'lsa —
- * faqat log yoziladi, tizim to'xtamaydi (heartbeat vaqtincha yetib
- * bormasligi hech qanday funksional oqimga ta'sir qilmasligi kerak).
- */
 async function watchHeartbeat(): Promise<void> {
   while (running) {
     try {
@@ -312,12 +249,8 @@ export async function startAgent(): Promise<void> {
   logger.info('AutoStoyanka Local Agent ishga tushdi');
   logger.info(`Server: ${config.serverUrl}`);
 
-  // Live View — Socket.IO orqali, o'zining voqea-asosidagi (event-driven)
-  // ulanishi bilan, boshqa oqimlardan mustaqil ishlaydi.
   startLiveView();
 
-  // Kirish, Chiqish, Navbat, Konfiguratsiya va Heartbeat oqimlari bir
-  // vaqtda, mustaqil ishlaydi
   await Promise.all([watchEntry(), watchExit(), watchQueue(), watchConfig(), watchHeartbeat()]);
 
   logger.info("Local Agent to'xtatildi");
