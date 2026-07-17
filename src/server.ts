@@ -9,6 +9,14 @@ import { describeError } from './errors';
 
 export type ParkingEventType = 'entry' | 'exit';
 
+// s-backend'ga har bir HTTP so'rov (postToServer/verifyPlate) shu vaqtdan
+// ko'p kutmaydi. index.ts'dagi SHUTDOWN_SAFETY_TIMEOUT_MS ATAYLAB shu
+// qiymatdan KATTA qilib hisoblanadi (shu konstantadan import qilib) — aks
+// holda shutdown paytida hali javob kutayotgan so'rov ma'lumot yo'qotmasdan
+// yakunlanishga (yoki navbatga saqlanishga) ulgurmay, process majburan
+// o'chirilib qolishi mumkin edi.
+export const BACKEND_REQUEST_TIMEOUT_MS = 15000;
+
 export interface EntryResult {
   detected: boolean;
   queued?: boolean;
@@ -17,6 +25,14 @@ export interface EntryResult {
     id?: number;
     plate_number?: string;
   };
+  // `detected: false` bo'lganda SABABNI aniq ko'rsatadi — agent.ts buni
+  // to'g'ri, chalg'itmaydigan log yozish uchun ishlatadi:
+  //  - 'ocr_failed'    — so'rov muvaffaqiyatli bajarildi, lekin OCR nomer topmadi (haqiqiy OCR muammosi)
+  //  - 'auth_error'    — backend 401 qaytardi (Agent API Key noto'g'ri/eskirgan)
+  //  - 'duplicate'     — backend 409 qaytardi (mashina allaqachon stoyankada)
+  //  - 'client_error'  — boshqa qayta urinishga arzimaydigan 4xx (masalan 400/422)
+  //  - 'network_error' — tarmoq/timeout/5xx, rasm navbatga saqlandi (`queued: true`)
+  reason?: 'ocr_failed' | 'auth_error' | 'duplicate' | 'client_error' | 'network_error';
 }
 
 export interface VerifyResult {
@@ -54,6 +70,15 @@ function isRetryableError(error: unknown): boolean {
   return true;
 }
 
+/** Qayta urinishga arzimaydigan (4xx) xatoning ANIQ sababini aniqlaydi — faqat isRetryableError false qaytarganda chaqiriladi. */
+function describeNonRetryableReason(error: unknown): 'auth_error' | 'duplicate' | 'client_error' {
+  if (axios.isAxiosError(error) && error.response) {
+    if (error.response.status === 401) return 'auth_error';
+    if (error.response.status === 409) return 'duplicate';
+  }
+  return 'client_error';
+}
+
 async function saveToQueue(type: ParkingEventType, image: Buffer, capturedAt: string): Promise<string> {
   await fs.mkdir(QUEUE_DIR, { recursive: true });
 
@@ -87,7 +112,7 @@ export async function postToServer(
       ...form.getHeaders(),
       'X-Agent-Key': config.agentApiKey,
     },
-    timeout: 15000,
+    timeout: BACKEND_REQUEST_TIMEOUT_MS,
   });
 
   return response.data;
@@ -103,11 +128,16 @@ export async function sendToServer(
   capturedAt: string = new Date().toISOString()
 ): Promise<EntryResult> {
   try {
-    return await postToServer(type, image, capturedAt);
+    const result = await postToServer(type, image, capturedAt);
+    if (!result.detected && !result.reason) {
+      return { ...result, reason: 'ocr_failed' };
+    }
+    return result;
   } catch (error) {
     if (!isRetryableError(error)) {
+      const reason = describeNonRetryableReason(error);
       logger.error(`Server ga yuborishda xato (${type}): ${describeError(error)}`);
-      return { detected: false };
+      return { detected: false, reason };
     }
 
     try {
@@ -117,7 +147,7 @@ export async function sendToServer(
       logger.error(`Navbatga saqlashda xato: ${describeError(queueError)}`);
     }
 
-    return { detected: false, queued: true };
+    return { detected: false, queued: true, reason: 'network_error' };
   }
 }
 
@@ -141,7 +171,7 @@ export async function verifyPlate(image: Buffer): Promise<VerifyResult> {
         ...form.getHeaders(),
         'X-Agent-Key': config.agentApiKey,
       },
-      timeout: 15000,
+      timeout: BACKEND_REQUEST_TIMEOUT_MS,
     });
 
     return response.data;
@@ -156,16 +186,24 @@ export async function verifyPlate(image: Buffer): Promise<VerifyResult> {
  * `cameraEntryOk`/`cameraExitOk` — har bir kamera turining ENG SO'NGGI
  * `captureFrame()` urinishi muvaffaqiyatli bo'lgan-bo'lmaganini bildiradi
  * (`agent.ts` dagi `lastCameraEntryOk`/`lastCameraExitOk`) — hali hech
- * qanday urinish bo'lmagan bo'lsa `null`. Shunda backend/operator s-agent
- * DASTURI ishlab turgani bilan birga, KAMERANING o'zi ham ulanganligini
- * bilib oladi. Xato bo'lsa tashlaydi — chaqiruvchi (`agent.ts`) buni faqat
- * log yozib o'tkazib yuborishi kerak, chunki heartbeat vaqtincha
- * yetib bormasligi tizimni to'xtatadigan sabab emas.
+ * qanday urinish bo'lmagan bo'lsa `null`. `failedQueueCount` — `queue/failed/`
+ * papkasida qolib ketgan (MAX_ATTEMPTS marta yuborilmagan) so'rovlar soni,
+ * shunda operator navbat orqasida to'planib qolgan yo'qolgan hodisalar
+ * borligini (papkani qo'lda tekshirmasdan) heartbeat orqali bilib oladi.
+ * Shunda backend/operator s-agent DASTURI ishlab turgani bilan birga,
+ * KAMERANING o'zi ham ulanganligini bilib oladi. Xato bo'lsa tashlaydi —
+ * chaqiruvchi (`agent.ts`) buni faqat log yozib o'tkazib yuborishi kerak,
+ * chunki heartbeat vaqtincha yetib bormasligi tizimni to'xtatadigan sabab
+ * emas.
  */
-export async function sendHeartbeat(cameraEntryOk: boolean | null, cameraExitOk: boolean | null): Promise<void> {
+export async function sendHeartbeat(
+  cameraEntryOk: boolean | null,
+  cameraExitOk: boolean | null,
+  failedQueueCount: number
+): Promise<void> {
   await axios.post(
     `${config.serverUrl}${HEARTBEAT_PATH}`,
-    { camera_entry_ok: cameraEntryOk, camera_exit_ok: cameraExitOk },
+    { camera_entry_ok: cameraEntryOk, camera_exit_ok: cameraExitOk, failed_queue_count: failedQueueCount },
     {
       headers: { 'X-Agent-Key': config.agentApiKey },
       timeout: 5000,

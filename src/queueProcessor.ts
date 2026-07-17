@@ -5,6 +5,7 @@ import { logger } from './logger';
 import { describeError } from './errors';
 
 const FAILED_DIR = path.join(QUEUE_DIR, 'failed');
+const CORRUPTED_DIR = path.join(QUEUE_DIR, 'corrupted');
 const MAX_ATTEMPTS = 5;
 
 interface QueueEntry {
@@ -34,10 +35,35 @@ export async function getQueueSize(): Promise<number> {
   return files.length;
 }
 
+/** `failed/`ga tushib qolgan (MAX_ATTEMPTS marta yuborilmagan) so'rovlar sonini qaytaradi — heartbeat orqali backend/operator ogohlantirilishi uchun. */
+export async function getFailedQueueSize(): Promise<number> {
+  try {
+    const files = await fs.readdir(FAILED_DIR);
+    return files.filter((f) => f.endsWith('.json')).length;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return 0;
+    }
+    throw error;
+  }
+}
+
 async function moveToFailed(filename: string, entry: QueueEntry): Promise<void> {
   await fs.mkdir(FAILED_DIR, { recursive: true });
   await fs.writeFile(path.join(FAILED_DIR, filename), JSON.stringify(entry));
   await fs.unlink(path.join(QUEUE_DIR, filename));
+}
+
+/**
+ * Parse qilib bo'lmaydigan (buzilgan) navbat faylini `corrupted/`ga
+ * ko'chiradi. Buni QUEUE_DIR'dan chiqarib yubormasak, `entry` hech qachon
+ * valid bo'lmagani uchun fayl na yuborilishi, na 5-urinishdan keyin
+ * `failed/`ga tushishi mumkin — natijada har 30 soniyada abadiy qayta
+ * o'qishga urinilib, abadiy xato loglaydi.
+ */
+async function moveToCorrupted(filename: string): Promise<void> {
+  await fs.mkdir(CORRUPTED_DIR, { recursive: true });
+  await fs.rename(path.join(QUEUE_DIR, filename), path.join(CORRUPTED_DIR, filename));
 }
 
 async function processQueueFile(filename: string): Promise<void> {
@@ -47,7 +73,14 @@ async function processQueueFile(filename: string): Promise<void> {
   try {
     entry = JSON.parse(await fs.readFile(filePath, 'utf-8'));
   } catch (error) {
-    logger.error(`Navbat faylini o'qib bo'lmadi (${filename}): ${describeError(error)}`);
+    logger.error(
+      `Navbat fayli buzilgan, o'qib bo'lmadi (${filename}): ${describeError(error)} — corrupted/ ga ko'chirilmoqda`
+    );
+    try {
+      await moveToCorrupted(filename);
+    } catch (moveError) {
+      logger.error(`Buzilgan faylni corrupted/ ga ko'chirishda xato (${filename}): ${describeError(moveError)}`);
+    }
     return;
   }
 

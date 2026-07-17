@@ -3,7 +3,7 @@ import { captureFrame } from './camera';
 import { detectMotion } from './motion';
 import { openBarrier } from './barrier';
 import { sendToServer, verifyPlate, sendHeartbeat, EntryResult, ParkingEventType } from './server';
-import { getQueueSize, processQueue } from './queueProcessor';
+import { getQueueSize, getFailedQueueSize, processQueue } from './queueProcessor';
 import { getAgentConfig, updateAgentConfig, resolveBarrierPort, resolveCameraAuth } from './agentConfig';
 import { fetchAgentConfig } from './configFetcher';
 import { startLiveView, stopLiveView } from './liveView';
@@ -196,9 +196,28 @@ async function watchCamera(
         if (result.detected) {
           logger.info(`${label}: nomer aniqlandi: ${result.session?.plate_number ?? "noma'lum"}`);
           await confirmAndOpenBarrier(type, latestCameraUrl, result, label);
-        } else if (!result.queued) {
-          // queued=true holatda sendToServer o'zi "navbatga saqlandi" logini allaqachon yozgan
-          logger.warn(`${label}: nomer aniqlanmadi — operator xabardor`);
+        } else {
+          // `reason` asosida ANIQ sabab logga yoziladi — "nomer aniqlanmadi"
+          // faqat HAQIQIY OCR muammosida chiqadi, boshqa sabablarni (masalan
+          // 401/409) yashirmaydi/chalg'itmaydi.
+          switch (result.reason) {
+            case 'auth_error':
+              logger.error(`${label}: Server autentifikatsiya xatosi (401) — Agent API Key ni tekshiring!`);
+              break;
+            case 'duplicate':
+              logger.warn(`${label}: Bu mashina allaqachon stoyankada (409)`);
+              break;
+            case 'client_error':
+              logger.error(`${label}: Server so'rovni rad etdi (qayta urinishga arzimaydigan xato) — texnik xodimga xabar bering`);
+              break;
+            case 'network_error':
+              // sendToServer o'zi "navbatga saqlandi" logini allaqachon yozgan
+              break;
+            case 'ocr_failed':
+            default:
+              logger.warn(`${label}: nomer aniqlanmadi — operator xabardor`);
+              break;
+          }
         }
 
         // 5 soniya kut (bir mashina uchun qayta ishga tushmasin)
@@ -278,7 +297,8 @@ async function watchConfig(): Promise<void> {
 async function watchHeartbeat(): Promise<void> {
   while (running) {
     try {
-      await sendHeartbeat(lastCameraEntryOk, lastCameraExitOk);
+      const failedQueueCount = await getFailedQueueSize();
+      await sendHeartbeat(lastCameraEntryOk, lastCameraExitOk, failedQueueCount);
     } catch (error) {
       logger.warn(`Heartbeat yuborishda xato: ${describeError(error)}`);
     }

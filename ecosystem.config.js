@@ -17,10 +17,14 @@ module.exports = {
       max_restarts: 100,
       // s-agent SIGTERM kelganda o'zi graceful shutdown qiladi (barcha
       // oqimlarni to'xtatib, Live View ulanishlarini yopib, so'ng chiqadi) —
-      // bu jarayon ~8 soniyagacha davom etishi mumkin. PM2'ning standart
-      // kill_timeout (1.6s) juda qisqa bo'lardi va bizni yarim yo'lda
-      // SIGKILL bilan majburan o'ldirib qo'yardi — shu sabab oshirilgan.
-      kill_timeout: 10000,
+      // bu jarayon index.ts'dagi SHUTDOWN_SAFETY_TIMEOUT_MS'ga ko'ra
+      // 18 soniyagacha (BACKEND_REQUEST_TIMEOUT_MS + 3s) davom etishi
+      // mumkin. PM2'ning standart kill_timeout (1.6s) juda qisqa bo'lardi
+      // va bizni yarim yo'lda SIGKILL bilan majburan o'ldirib qo'yardi —
+      // shu sabab SHUTDOWN_SAFETY_TIMEOUT_MS'dan SEZILARLI KATTA qilib
+      // oshirilgan (aks holda in-flight backend so'rovi navbatga ulgurmay
+      // process majburan o'ldirilib, hodisa yo'qolib qolishi mumkin edi).
+      kill_timeout: 20000,
       env: {
         NODE_ENV: 'production',
       },

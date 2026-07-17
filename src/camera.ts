@@ -5,11 +5,82 @@ const REQUEST_TIMEOUT_MS = 5000;
 const MAX_BUFFER_BYTES = 10 * 1024 * 1024; // 10 MB — buzilgan/cheksiz oqimdan himoya
 
 const JPEG_SOI = Buffer.from([0xff, 0xd8]); // Start Of Image
-const JPEG_EOI = Buffer.from([0xff, 0xd9]); // End Of Image
 
 /**
- * Kelgan baytlar to'plamidan BIRINCHI to'liq JPEG kadrni (SOI...EOI) ajratib
- * oladi. Bu yondashuv universal: kamera oddiy bitta-rasm endpointi
+ * SOI'dan boshlab JPEG segmentlarini (APPn/EXIF, DQT, DHT, SOFn va h.k.)
+ * o'z uzunlik maydonlariga qarab o'tkazib yuboradi va SOS (skan boshlanishi,
+ * 0xFFDA) markeriga yetgach, haqiqiy skan (rasm) ma'lumoti ichidan
+ * (byte-stuffing qoidasiga rioya qilgan holda) haqiqiy EOI'ni qidiradi.
+ *
+ * MUHIM: agar shunchaki BIRINCHI uchragan 0xFFD9 (EOI) izlansa (avvalgi
+ * yondashuv), EXIF/APP1 segmenti ichiga joylashtirilgan thumbnail'ning
+ * O'ZINING EOI'si asosiy kadr EOI'sidan OLDIN kelib, kadr chala/buzilgan
+ * qaytarilishi mumkin edi (ba'zi kamera firmware'lari shunday qiladi).
+ * Segmentlarni uzunligiga qarab o'tkazib yuborish bu holatni to'g'ri
+ * hisobga oladi, chunki thumbnail APP1 segmentining ICHIDA, uning
+ * uzunlik maydoni bilan birga to'liq qamrab olinadi.
+ *
+ * Hali to'liq header/skan kelmagan bo'lsa (bufer segment uzunligidan
+ * qisqa) — `null` qaytaradi, chaqiruvchi keyingi 'data' chunk kelgach
+ * qayta urinadi (avvalgi mantiq bilan bir xil).
+ */
+function findFrameEnd(buffer: Buffer, start: number): number | null {
+  let pos = start + JPEG_SOI.length;
+  let sosFound = false;
+
+  while (pos + 2 <= buffer.length) {
+    if (buffer[pos] !== 0xff) return null;
+    const marker = buffer[pos + 1];
+
+    if (marker === 0xd9) {
+      return pos + 2; // SOS'dan oldin EOI — kutilmagan, lekin xavfsiz holat
+    }
+
+    // Uzunlik maydonisiz, mustaqil markerlar: SOI, TEM, RSTn
+    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+      pos += 2;
+      continue;
+    }
+
+    if (pos + 4 > buffer.length) return null; // uzunlik maydoni hali to'liq kelmagan
+    const segmentLength = buffer.readUInt16BE(pos + 2);
+    if (segmentLength < 2) return null; // buzilgan segment uzunligi
+
+    pos += 2 + segmentLength;
+
+    if (marker === 0xda) {
+      sosFound = true;
+      break;
+    }
+  }
+
+  if (!sosFound || pos > buffer.length) {
+    return null;
+  }
+
+  // Skan ma'lumoti ichida haqiqiy EOI'ni qidiramiz: 0xFF dan keyin 0x00
+  // kelsa — bu byte-stuffing (ichidagi haqiqiy 0xFF bayt, marker emas),
+  // shu sabab o'tkazib yuboriladi. RSTn (restart) markerlari ham EOI emas.
+  while (pos + 1 < buffer.length) {
+    if (buffer[pos] === 0xff) {
+      const next = buffer[pos + 1];
+      if (next === 0xd9) {
+        return pos + 2;
+      }
+      if (next !== 0x00 && !(next >= 0xd0 && next <= 0xd7)) {
+        pos += 2;
+        continue;
+      }
+    }
+    pos += 1;
+  }
+
+  return null;
+}
+
+/**
+ * Kelgan baytlar to'plamidan BIRINCHI to'liq JPEG kadrni (SOI...haqiqiy EOI)
+ * ajratib oladi. Bu yondashuv universal: kamera oddiy bitta-rasm endpointi
  * (`/snapshot.jpg`) bo'lsin, uzluksiz MJPEG stream (`/video`) bo'lsin —
  * ikkalasida ham JPEG bayt markerlari bir xil, multipart chegara
  * formatini (boundary) bilish yoki taxmin qilish shart emas.
@@ -18,10 +89,10 @@ function extractFirstJpeg(buffer: Buffer): Buffer | null {
   const start = buffer.indexOf(JPEG_SOI);
   if (start === -1) return null;
 
-  const end = buffer.indexOf(JPEG_EOI, start + JPEG_SOI.length);
-  if (end === -1) return null;
+  const end = findFrameEnd(buffer, start);
+  if (end === null) return null;
 
-  return buffer.subarray(start, end + JPEG_EOI.length);
+  return buffer.subarray(start, end);
 }
 
 /**

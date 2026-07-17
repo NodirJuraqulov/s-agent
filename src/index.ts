@@ -5,6 +5,7 @@ import { updateAgentConfig } from './agentConfig';
 import { acquireLock, releaseLock } from './lock';
 import { logger } from './logger';
 import { describeError } from './errors';
+import { BACKEND_REQUEST_TIMEOUT_MS } from './server';
 
 // Eng birinchi ish — shu kompyuterda s-agentning boshqa nusxasi (masalan
 // PM2 orqali fonda) allaqachon ishlab turgan bo'lsa, darhol to'xtaymiz.
@@ -12,12 +13,19 @@ import { describeError } from './errors';
 // bajariladi — ikkita nusxa bir vaqtda bitta kameraga ulanmasligi uchun.
 acquireLock();
 
-// camera.ts o'zining 5 soniyalik qattiq (AbortController) timeout'iga ega —
-// shutdown paytida biror captureFrame() hozir ishlab turgan bo'lishi mumkin
-// va biz uni majburan bekor qilmaymiz. Shu sabab bu xavfsizlik chegarasi
-// o'shandan SEZILARLI KATTA bo'lishi kerak, aks holda "toza" (mainPromise)
-// yakunlanish bilan poyga qilib, doim g'olib chiqib ketaveradi.
-const SHUTDOWN_SAFETY_TIMEOUT_MS = 8000;
+// Shutdown paytida mainPromise hali ham ikkita uzoq operatsiyadan birining
+// o'rtasida bo'lishi mumkin: camera.ts'ning 5 soniyalik qattiq
+// (AbortController) timeout'i, YOKI backend'ga POST so'rovi
+// (BACKEND_REQUEST_TIMEOUT_MS, server.ts — postToServer/verifyPlate). Ular
+// ketma-ket emas, mustaqil ehtimoliy holatlar, shuning uchun bu xavfsizlik
+// chegarasi ENG UZUNIDAN (backend so'rovi) SEZILARLI KATTA bo'lishi SHART —
+// aks holda process hali javob/xato kutayotgan (demak hali navbatga
+// saqlanmagan) so'rovni yarim yo'lda o'ldirib, rasmni YO'QOTIB QO'YADI (na
+// backend'ga yetadi, na queue/ga tushadi). Bu qiymat ATAYLAB
+// BACKEND_REQUEST_TIMEOUT_MS'dan import qilib hisoblanadi — ikkalasi
+// alohida fayllarda qo'lda yozilsa, kelajakda biri o'zgarib biri
+// o'zgarmasdan qolib, xuddi shu muammo qaytishi mumkin edi.
+const SHUTDOWN_SAFETY_TIMEOUT_MS = BACKEND_REQUEST_TIMEOUT_MS + 3000;
 
 async function main(): Promise<void> {
   // Asosiy oqimlar (Kirish/Chiqish/Navbat/Konfiguratsiya) boshlanishidan oldin
