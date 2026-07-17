@@ -3,7 +3,13 @@ import { captureFrame } from './camera';
 import { detectMotion } from './motion';
 import { openBarrier } from './barrier';
 import { sendToServer, verifyPlate, sendHeartbeat, EntryResult, ParkingEventType } from './server';
-import { getQueueSize, getFailedQueueSize, processQueue } from './queueProcessor';
+import {
+  getQueueSize,
+  getFailedQueueSize,
+  getCorruptedQueueSize,
+  processQueue,
+  cleanupOldQueueFiles,
+} from './queueProcessor';
 import { getAgentConfig, updateAgentConfig, resolveBarrierPort, resolveCameraAuth } from './agentConfig';
 import { fetchAgentConfig } from './configFetcher';
 import { startLiveView, stopLiveView } from './liveView';
@@ -14,6 +20,7 @@ import { describeError } from './errors';
 const QUEUE_CHECK_INTERVAL_MS = 30000;
 const CONFIG_REFRESH_INTERVAL_MS = 60000;
 const HEARTBEAT_INTERVAL_MS = 30000;
+const CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 let running = true;
 
@@ -181,7 +188,7 @@ async function watchCamera(
       await sleep(config.captureIntervalMs);
     } catch (error) {
       logger.error(`${label} xatosi: ${describeError(error)}`);
-      await sleep(5000); // Xato bo'lsa 5s kut, qayta urinish
+      await sleep(5000);
     }
   }
 
@@ -235,7 +242,8 @@ async function watchHeartbeat(): Promise<void> {
   while (running) {
     try {
       const failedQueueCount = await getFailedQueueSize();
-      await sendHeartbeat(lastCameraEntryOk, lastCameraExitOk, failedQueueCount);
+      const corruptedQueueCount = await getCorruptedQueueSize();
+      await sendHeartbeat(lastCameraEntryOk, lastCameraExitOk, failedQueueCount, corruptedQueueCount);
     } catch (error) {
       logger.warn(`Heartbeat yuborishda xato: ${describeError(error)}`);
     }
@@ -245,13 +253,33 @@ async function watchHeartbeat(): Promise<void> {
   logger.info("Heartbeat kuzatuvi to'xtatildi");
 }
 
+async function watchCleanup(): Promise<void> {
+  while (running) {
+    try {
+      await cleanupOldQueueFiles();
+    } catch (error) {
+      logger.error(`Eski navbat fayllarini tozalashda xato: ${describeError(error)}`);
+    }
+    await sleep(CLEANUP_INTERVAL_MS);
+  }
+
+  logger.info("Navbat tozalash kuzatuvi to'xtatildi");
+}
+
 export async function startAgent(): Promise<void> {
   logger.info('AutoStoyanka Local Agent ishga tushdi');
   logger.info(`Server: ${config.serverUrl}`);
 
   startLiveView();
 
-  await Promise.all([watchEntry(), watchExit(), watchQueue(), watchConfig(), watchHeartbeat()]);
+  await Promise.all([
+    watchEntry(),
+    watchExit(),
+    watchQueue(),
+    watchConfig(),
+    watchHeartbeat(),
+    watchCleanup(),
+  ]);
 
   logger.info("Local Agent to'xtatildi");
 }

@@ -153,11 +153,17 @@ export async function verifyPlate(image: Buffer): Promise<VerifyResult> {
 export async function sendHeartbeat(
   cameraEntryOk: boolean | null,
   cameraExitOk: boolean | null,
-  failedQueueCount: number
+  failedQueueCount: number,
+  corruptedQueueCount: number
 ): Promise<void> {
   await axios.post(
     `${config.serverUrl}${HEARTBEAT_PATH}`,
-    { camera_entry_ok: cameraEntryOk, camera_exit_ok: cameraExitOk, failed_queue_count: failedQueueCount },
+    {
+      camera_entry_ok: cameraEntryOk,
+      camera_exit_ok: cameraExitOk,
+      failed_queue_count: failedQueueCount,
+      corrupted_queue_count: corruptedQueueCount,
+    },
     {
       headers: { 'X-Agent-Key': config.agentApiKey },
       timeout: 5000,
