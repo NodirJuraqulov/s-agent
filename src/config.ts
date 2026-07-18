@@ -5,6 +5,25 @@ import { logger } from './logger';
 
 dotenv.config();
 
+const FATAL_LOG_PATH = path.join(process.cwd(), 'logs', 'fatal-startup-errors.log');
+const FATAL_LOG_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+
+function pruneOldFatalLogLines(content: string): string {
+  const now = Date.now();
+
+  return content
+    .split('\n')
+    .filter((line) => {
+      if (!line) return false;
+      const match = line.match(/^\[([^\]]+)]/);
+      if (!match) return true;
+      const timestamp = Date.parse(match[1]);
+      if (Number.isNaN(timestamp)) return true;
+      return now - timestamp <= FATAL_LOG_MAX_AGE_MS;
+    })
+    .join('\n');
+}
+
 function reportFatalConfigError(message: string): never {
   console.error(message);
 
@@ -15,12 +34,11 @@ function reportFatalConfigError(message: string): never {
   }
 
   try {
-    const logDir = path.join(process.cwd(), 'logs');
-    fs.mkdirSync(logDir, { recursive: true });
-    fs.appendFileSync(
-      path.join(logDir, 'fatal-startup-errors.log'),
-      `[${new Date().toISOString()}] [FATAL] ${message}\n`
-    );
+    fs.mkdirSync(path.dirname(FATAL_LOG_PATH), { recursive: true });
+    const existing = fs.existsSync(FATAL_LOG_PATH) ? fs.readFileSync(FATAL_LOG_PATH, 'utf-8') : '';
+    const pruned = pruneOldFatalLogLines(existing);
+    const newLine = `[${new Date().toISOString()}] [FATAL] ${message}`;
+    fs.writeFileSync(FATAL_LOG_PATH, pruned ? `${pruned}\n${newLine}\n` : `${newLine}\n`);
   } catch {
 
   }
