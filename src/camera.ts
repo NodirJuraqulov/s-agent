@@ -56,7 +56,7 @@ function findFrameEnd(buffer: Buffer, start: number): number | null {
   return null;
 }
 
-function extractFirstJpeg(buffer: Buffer): Buffer | null {
+export function extractFirstJpeg(buffer: Buffer): Buffer | null {
   const start = buffer.indexOf(JPEG_SOI);
   if (start === -1) return null;
 

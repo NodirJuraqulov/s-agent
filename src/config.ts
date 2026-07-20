@@ -56,7 +56,7 @@ function required(name: string): string {
   return value;
 }
 
-function parseNumberEnv(raw: string | undefined, defaultValue: number): number {
+export function parseNumberEnv(raw: string | undefined, defaultValue: number): number {
   if (raw === undefined) return defaultValue;
   const parsed = Number(raw);
   return Number.isNaN(parsed) ? defaultValue : parsed;

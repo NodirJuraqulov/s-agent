@@ -11,7 +11,9 @@
     "pm2:stop": "pm2 stop s-agent",
     "pm2:restart": "pm2 restart s-agent",
     "pm2:logs": "pm2 logs s-agent",
-    "pm2:status": "pm2 status s-agent"
+    "pm2:status": "pm2 status s-agent",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "axios": "^1.7.9",
@@ -26,6 +28,7 @@
   "devDependencies": {
     "@types/node": "^22.10.5",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.10"
   }
 }
