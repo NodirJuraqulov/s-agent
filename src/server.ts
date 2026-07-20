@@ -19,7 +19,7 @@ export interface EntryResult {
     id?: number;
     plate_number?: string;
   };
-  reason?: 'ocr_failed' | 'auth_error' | 'duplicate' | 'client_error' | 'network_error';
+  reason?: 'ocr_failed' | 'no_candidate' | 'auth_error' | 'duplicate' | 'client_error' | 'network_error';
 }
 
 export interface VerifyResult {

@@ -119,6 +119,29 @@ async function confirmAndOpenBarrier(
   }
 }
 
+export function logDetectionOutcome(label: string, result: EntryResult): void {
+  switch (result.reason) {
+    case 'auth_error':
+      logger.error(`${label}: Server autentifikatsiya xatosi (401) — Agent API Key ni tekshiring!`);
+      break;
+    case 'duplicate':
+      logger.warn(`${label}: Bu mashina allaqachon stoyankada (409)`);
+      break;
+    case 'client_error':
+      logger.error(`${label}: Server so'rovni rad etdi (qayta urinishga arzimaydigan xato) — texnik xodimga xabar bering`);
+      break;
+    case 'network_error':
+      break;
+    case 'no_candidate':
+      logger.info(`${label}: harakat sezildi, lekin nomer-kandidat topilmadi`);
+      break;
+    case 'ocr_failed':
+    default:
+      logger.warn(`${label}: nomer aniqlanmadi — operator xabardor`);
+      break;
+  }
+}
+
 async function watchCamera(
   type: ParkingEventType,
   getCameraUrl: () => string | null,
@@ -163,23 +186,7 @@ async function watchCamera(
           logger.info(`${label}: nomer aniqlandi: ${result.session?.plate_number ?? "noma'lum"}`);
           await confirmAndOpenBarrier(type, latestCameraUrl, result, label);
         } else {
-          switch (result.reason) {
-            case 'auth_error':
-              logger.error(`${label}: Server autentifikatsiya xatosi (401) — Agent API Key ni tekshiring!`);
-              break;
-            case 'duplicate':
-              logger.warn(`${label}: Bu mashina allaqachon stoyankada (409)`);
-              break;
-            case 'client_error':
-              logger.error(`${label}: Server so'rovni rad etdi (qayta urinishga arzimaydigan xato) — texnik xodimga xabar bering`);
-              break;
-            case 'network_error':
-              break;
-            case 'ocr_failed':
-            default:
-              logger.warn(`${label}: nomer aniqlanmadi — operator xabardor`);
-              break;
-          }
+          logDetectionOutcome(label, result);
         }
 
         await sleep(5000);
